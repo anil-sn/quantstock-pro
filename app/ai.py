@@ -12,7 +12,10 @@ client = genai.Client(api_key=settings.GEMINI_API_KEY) if settings.GEMINI_API_KE
 async def interpret_advanced(
     ticker: str, 
     technicals: Technicals, 
-    company_info: dict
+    company_info: dict,
+    mode: str = "all",
+    fundamentals: Any = None,
+    market_context: Any = None
 ) -> AIAnalysisResult | None:
     if not client:
         return None
@@ -25,8 +28,52 @@ async def interpret_advanced(
         print(f"Warning: Could not load framework: {e}")
         framework_content = "Adhere to standard professional trading risk management rules."
 
+    fundamentals_section = ""
+    news_section = ""
+    context_section = ""
+    
+    if fundamentals:
+        # Extract news to format it nicely
+        news_items = getattr(fundamentals, 'news', [])
+        if news_items:
+            news_list = "\n".join([f"- {n.title} ({n.publisher})" for n in news_items])
+            news_section = f"""
+    ## RECENT NEWS & CATALYSTS
+    {news_list}
+    """
+            # Temporarily clear news from object to avoid duplicate tokens in JSON dump
+            # We use a dict dump to avoid modifying the original object in place if needed
+            fund_dict = fundamentals.model_dump()
+            fund_dict.pop('news', None)
+            fundamentals_json = json.dumps(fund_dict, indent=2)
+        else:
+            fundamentals_json = fundamentals.model_dump_json(indent=2)
+            
+        fundamentals_section = f"""
+    ## FUNDAMENTAL DATA
+    {fundamentals_json}
+    """
+
+    if market_context:
+        context_section = f"""
+    ## MARKET CONTEXT (SMART MONEY)
+    {market_context.model_dump_json(indent=2)}
+    """
+
     prompt = f"""
     # QUANTITATIVE STOCK ANALYSIS FRAMEWORK
+    
+    ## OPERATIONAL MODE: {mode.upper()}
+    You are strictly analyzing in {mode.upper()} mode. 
+    - If INTRADAY: Focus ONLY on short-term price action, volume anomalies, and 15M/5M structure. Ignore long-term fundamentals.
+    - If SWING: Focus on Daily structure, 4H trends, and key support/resistance. Incorporate valuation and growth metrics.
+    - If LONGTERM: Focus on Weekly structure and major moving averages. Heavily weigh fundamental health (Debt, Margins, Growth).
+    
+    ## CONTEXTUAL INTELLIGENCE INSTRUCTIONS
+    1. **Analyst Targets:** Compare the 'current_price' to the 'price_target.mean'. Is there implied upside?
+    2. **Smart Money:** Analyze 'insider_activity' and 'option_sentiment'. Are insiders buying? Is the Put/Call ratio bullish?
+    3. **Event Risk:** Check 'events.earnings_date'. If within 7 days, flag as HIGH RISK.
+    4. **Consensus:** Use 'consensus' to gauge broad market sentiment (e.g., "Strong Buy" count).
     
     ## TRADING RULES & CONSTITUTION
     {framework_content}
@@ -39,7 +86,9 @@ async def interpret_advanced(
     
     ## QUANTITATIVE METRICS
     {technicals.model_dump_json(indent=2)}
-    
+    {fundamentals_section}
+    {news_section}
+    {context_section}
     ## OUTPUT FORMAT
     Return ONLY valid JSON matching this schema:
     {{

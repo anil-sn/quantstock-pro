@@ -3,8 +3,13 @@ import numpy as np
 import pandas as pd
 from .market_data import fetch_stock_data
 from .technicals import calculate_advanced_technicals, calculate_algo_signal
+from .fundamentals import get_fundamentals
+from .context import get_market_context
 from .ai import interpret_advanced
-from .models import AdvancedStockResponse, TechnicalStockResponse, RiskMetrics, TradeSetup, TradeAction, RiskLevel, StockOverview, ScoreDetail
+from .models import (
+    AdvancedStockResponse, TechnicalStockResponse, RiskMetrics, 
+    TradeSetup, TradeAction, RiskLevel, StockOverview, ScoreDetail, MarketContext
+)
 
 async def get_technical_analysis(ticker: str) -> TechnicalStockResponse:
     """Fast, purely quantitative analysis without AI insights"""
@@ -104,9 +109,11 @@ async def get_technical_analysis(ticker: str) -> TechnicalStockResponse:
         risk_metrics=risk_metrics
     )
 
-async def analyze_stock(ticker: str) -> AdvancedStockResponse:
-    # ... (fetching and calculation logic same as before)
-    data = await fetch_stock_data(ticker)
+async def analyze_stock(ticker: str, mode: Any = "all") -> AdvancedStockResponse:
+    # Determine interval based on mode
+    interval = "15m" if mode == "intraday" else "1d"
+    
+    data = await fetch_stock_data(ticker, interval=interval)
     df = data["dataframe"]
     returns = data["returns"]
     info = data["info"]
@@ -116,7 +123,15 @@ async def analyze_stock(ticker: str) -> AdvancedStockResponse:
     algo_signal = calculate_algo_signal(technicals)
     risk_metrics = calculate_risk_metrics(returns)
 
-    ai_analysis = await interpret_advanced(ticker, technicals, info)
+    # Fetch fundamentals for non-intraday modes
+    fundamentals = None
+    if mode in ["swing", "positional", "longterm", "all"]:
+        fundamentals = get_fundamentals(ticker)
+
+    # Fetch market context (Analyst/Insider/Options)
+    market_context = get_market_context(ticker)
+
+    ai_analysis = await interpret_advanced(ticker, technicals, info, mode, fundamentals, market_context)
     if not ai_analysis:
         raise ValueError("AI Analysis failed to generate results.")
 
@@ -180,6 +195,7 @@ async def analyze_stock(ticker: str) -> AdvancedStockResponse:
     )
 
     return AdvancedStockResponse(
+        analysis_mode=mode,
         overview=overview,
         ticker=ticker.upper(),
         company_name=info.get("longName"),
@@ -190,7 +206,8 @@ async def analyze_stock(ticker: str) -> AdvancedStockResponse:
         algo_signal=algo_signal,
         trade_setup=trade_setup,
         ai_analysis=ai_analysis,
-        risk_metrics=risk_metrics
+        risk_metrics=risk_metrics,
+        market_context=market_context
     )
 
 def calculate_risk_metrics(returns: Any) -> RiskMetrics:
@@ -214,3 +231,6 @@ def calculate_risk_metrics(returns: Any) -> RiskMetrics:
         max_drawdown=float(max_dd) if max_dd is not None else None,
         standard_deviation=float(returns.std() * np.sqrt(252))
     )
+
+async def get_fundamental_analysis(ticker: str) -> Any:
+    return get_fundamentals(ticker)

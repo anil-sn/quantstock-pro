@@ -1,7 +1,14 @@
 from enum import Enum
-from typing import List, Optional, Dict, Tuple, Any, Literal
+from typing import List, Optional, Dict, Tuple, Any, Literal, Union
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from datetime import datetime
+
+class AnalysisMode(str, Enum):
+    INTRADAY = "intraday"
+    SWING = "swing"
+    POSITIONAL = "positional"
+    LONGTERM = "longterm"
+    ALL = "all"
 
 class TrendDirection(str, Enum):
     BULLISH = "Bullish"
@@ -51,7 +58,7 @@ class SignalImpact(BaseModel):
     indicator: str
     direction: Literal["Bullish", "Bearish", "Neutral"]
     weight: int = Field(..., ge=1, le=10, description="Significance of this indicator to the thesis (1-10)")
-    value_at_analysis: Optional[float] = None
+    value_at_analysis: Union[float, str, None] = None
 
     @field_validator('direction', mode='before')
     @classmethod
@@ -153,7 +160,61 @@ class TechnicalStockResponse(BaseModel):
     risk_metrics: RiskMetrics
     timestamp: datetime = Field(default_factory=datetime.now)
 
+class AnalystRating(BaseModel):
+    firm: str
+    to_grade: str
+    action: str  # e.g., "up", "down", "init"
+    date: str
+
+class InsiderTrade(BaseModel):
+    date: str
+    insider_name: str
+    position: str
+    transaction_type: str  # "Buy" or "Sell"
+    shares: int
+    value: float
+
+class OptionSentiment(BaseModel):
+    put_call_ratio: float
+    implied_volatility: float
+    total_open_interest: int
+    sentiment: str  # "Bullish", "Bearish", "Neutral"
+    max_pain: Optional[float] = None
+    highest_call_oi_strike: Optional[float] = None
+    highest_put_oi_strike: Optional[float] = None
+
+class AnalystPriceTarget(BaseModel):
+    current: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
+    mean: Optional[float] = None
+    median: Optional[float] = None
+
+class AnalystConsensus(BaseModel):
+    period: str  # e.g. "0m"
+    strong_buy: int = 0
+    buy: int = 0
+    hold: int = 0
+    sell: int = 0
+    strong_sell: int = 0
+
+class UpcomingEvents(BaseModel):
+    earnings_date: Optional[str] = None
+    earnings_avg_estimate: Optional[float] = None
+    earnings_low_estimate: Optional[float] = None
+    earnings_high_estimate: Optional[float] = None
+    revenue_avg_estimate: Optional[int] = None
+
+class MarketContext(BaseModel):
+    analyst_ratings: List[AnalystRating] = []
+    insider_activity: List[InsiderTrade] = []
+    option_sentiment: Optional[OptionSentiment] = None
+    price_target: Optional[AnalystPriceTarget] = None
+    consensus: Optional[AnalystConsensus] = None
+    events: Optional[UpcomingEvents] = None
+    
 class AdvancedStockResponse(BaseModel):
+    analysis_mode: AnalysisMode = AnalysisMode.ALL
     overview: StockOverview
     ticker: str
     company_name: Optional[str] = None
@@ -165,6 +226,7 @@ class AdvancedStockResponse(BaseModel):
     trade_setup: TradeSetup
     ai_analysis: AIAnalysisResult
     risk_metrics: RiskMetrics
+    market_context: Optional[MarketContext] = None
     timestamp: datetime = Field(default_factory=datetime.now)
 
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
