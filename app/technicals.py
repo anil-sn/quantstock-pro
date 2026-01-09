@@ -63,8 +63,26 @@ def calculate_advanced_technicals(df: pd.DataFrame) -> Technicals:
     s1 = (2 * pivot) - latest['High']
     s2 = pivot - (latest['High'] - latest['Low'])
     
-    # Trend determination
-    ema_trend = "Bullish" if latest['EMA_50'] > latest['EMA_200'] else "Bearish"
+    # Trend determination - ROBUST VERSION
+    price = latest['Close']
+    ema20 = latest['EMA_20']
+    ema50 = latest['EMA_50']
+    ema200 = latest['EMA_200']
+    
+    # Check Price vs EMAs
+    above_all = price > ema20 and price > ema50 and price > ema200
+    below_all = price < ema20 and price < ema50 and price < ema200
+    
+    if above_all:
+        ema_trend = "Bullish"
+    elif below_all:
+        ema_trend = "Bearish"
+    elif price > ema200 and ema50 > ema200:
+        ema_trend = "Bullish" # Structural uptrend holding
+    elif price < ema200 and ema50 < ema200:
+        ema_trend = "Bearish" # Structural downtrend
+    else:
+        ema_trend = "Neutral"
     
     return Technicals(
         rsi=float(latest['RSI']),
@@ -124,14 +142,18 @@ def calculate_algo_signal(technicals: Technicals) -> AlgoSignal:
     )
     
     # Volatility score
-    volatility_val = 100 - (technicals.atr_percent * 10)
+    # Lower ATR % = More stable = Higher score
+    volatility_val = 100 - (technicals.atr_percent * 20) # Sharper penalty
     volatility_val = max(-100, min(100, volatility_val))
+    
+    vol_label = "High Stability" if technicals.atr_percent < 1.5 else ("Moderate" if technicals.atr_percent < 3.0 else "High Volatility / Unstable")
+    
     volatility_score = ScoreDetail(
         value=float(volatility_val),
         min_value=-100.0,
         max_value=100.0,
-        label="High Stability" if volatility_val > 50 else "High Volatility",
-        legend="-100 to +100 (Higher = Lower Relative Volatility)"
+        label=vol_label,
+        legend="-100 to +100 (Higher = More Price Stability)"
     )
     
     # Volume score
@@ -159,7 +181,7 @@ def calculate_algo_signal(technicals: Technicals) -> AlgoSignal:
         momentum_score=momentum_score,
         volatility_score=volatility_score,
         volume_score=volume_score,
-        volatility_risk=RiskLevel.LOW if technicals.atr_percent < 2 else RiskLevel.HIGH,
+        volatility_risk=RiskLevel.LOW if technicals.atr_percent < 1.5 else (RiskLevel.MODERATE if technicals.atr_percent < 3.0 else RiskLevel.HIGH),
         trend_strength="Strong" if technicals.adx > 25 else "Weak"
     )
 

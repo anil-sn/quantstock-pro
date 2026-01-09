@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import math
 from typing import List, Optional
+from datetime import datetime, timedelta
 from .models import MarketContext, AnalystRating, InsiderTrade, OptionSentiment, AnalystPriceTarget, AnalystConsensus, UpcomingEvents
 
 def sanitize(val):
@@ -20,20 +21,27 @@ def get_market_context(ticker: str) -> MarketContext:
     try:
         upgrades = stock.upgrades_downgrades
         if upgrades is not None and not upgrades.empty:
-            # Get latest 5
-            latest = upgrades.tail(5).sort_index(ascending=False)
+            # Get latest 10 to filter from
+            latest = upgrades.tail(10).sort_index(ascending=False)
+            cutoff_date = datetime.now().date() - timedelta(days=730) # 2 years
+            
             for idx, row in latest.iterrows():
                 try:
-                    date_str = str(idx.date()) if hasattr(idx, 'date') else str(idx).split(' ')[0]
-                except:
-                    date_str = str(idx)
+                    rating_date = idx.date() if hasattr(idx, 'date') else datetime.strptime(str(idx).split(' ')[0], '%Y-%m-%d').date()
                     
-                context.analyst_ratings.append(AnalystRating(
-                    firm=str(row['Firm']),
-                    to_grade=str(row['ToGrade']),
-                    action=str(row['Action']),
-                    date=date_str
-                ))
+                    if rating_date < cutoff_date:
+                        continue # Skip stale ratings
+                        
+                    date_str = str(rating_date)
+                    
+                    context.analyst_ratings.append(AnalystRating(
+                        firm=str(row['Firm']),
+                        to_grade=str(row['ToGrade']),
+                        action=str(row['Action']),
+                        date=date_str
+                    ))
+                except Exception:
+                    continue
     except Exception:
         pass 
 

@@ -167,6 +167,18 @@ def get_fundamentals(ticker: str) -> FundamentalData:
             data.current_ratio = info.get("currentRatio")
             data.quick_ratio = info.get("quickRatio")
             
+            # --- SANITY CHECKS ---
+            # 1. Debt paradox: If cash is 5x debt, D/E should not be > 100 (yfinance often misreports this)
+            if data.total_cash and data.total_debt and data.debt_to_equity:
+                if data.total_cash > data.total_debt * 5 and data.debt_to_equity > 1:
+                    data.debt_to_equity = None # Reject invalid ratio
+            
+            # 2. EV paradox: EV = MC + Debt - Cash. If EV < MC but debt > cash, data is broken.
+            if data.enterprise_value and data.market_cap:
+                if data.enterprise_value < data.market_cap and (data.total_debt or 0) > (data.total_cash or 0):
+                    data.enterprise_value = None
+            # ---------------------
+            
             # Ownership
             data.dividend_yield = info.get("dividendYield")
             data.payout_ratio = info.get("payoutRatio")

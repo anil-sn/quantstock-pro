@@ -75,6 +75,12 @@ async def interpret_advanced(
     3. **Event Risk:** Check 'events.earnings_date'. If within 7 days, flag as HIGH RISK.
     4. **Consensus:** Use 'consensus' to gauge broad market sentiment (e.g., "Strong Buy" count).
     
+    ## DATA VALIDATION & ACCOUNTABILITY RULES (STRICT)
+    1. **Stale Data:** If 'analyst_ratings' are provided, they have already been filtered for freshness (< 2 years). Use them with confidence.
+    2. **Volatility Anomaly:** If 'option_sentiment.implied_volatility' > 100%, FLAG AS DATA ERROR in your summary and do not base strategy on it.
+    3. **Financial Logic:** If 'debt_to_equity' is null but 'total_cash' is extremely high, assume the company has a "Fortress Balance Sheet" (Net Cash).
+    4. **No Cowardice:** If 'algo_signal.overall_score' is >= 70 or <= -70, the quantitative system has HIGH CONVICTION. You MUST NOT recommend "WAIT" unless you provide a specific "Golden Filter" reason (e.g., Price vs 200 EMA conflict).
+    
     ## TRADING RULES & CONSTITUTION
     {framework_content}
     

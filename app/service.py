@@ -72,6 +72,11 @@ async def get_technical_analysis(ticker: str) -> TechnicalStockResponse:
                 ("Score meets confluence threshold." if abs(algo_signal.overall_score.value) >= 70 else "REJECTED: Insufficient confluence for trade.")
     )
 
+    # Calculate Risk-Managed Position Size (1% Account Risk Rule)
+    trade_risk_dist_pct = (abs(stop_loss - current_price) / current_price) * 100
+    if trade_risk_dist_pct < 0.1: trade_risk_dist_pct = 0.1
+    position_size_final = min(5.0, 1.0 / (trade_risk_dist_pct / 100))
+
     trade_setup = TradeSetup(
         action=action,
         confidence=ScoreDetail(
@@ -88,11 +93,11 @@ async def get_technical_analysis(ticker: str) -> TechnicalStockResponse:
         ),
         entry_zone=entry_zone,
         stop_loss=stop_loss,
-        stop_loss_pct=(abs(stop_loss - current_price) / current_price) * 100,
+        stop_loss_pct=trade_risk_dist_pct,
         take_profit_targets=[target],
         risk_reward_ratio=2.0,
-        position_size_pct=min(5.0, 10.0 / technicals.atr_percent),
-        max_capital_at_risk=current_price * 0.02,
+        position_size_pct=position_size_final,
+        max_capital_at_risk=(position_size_final * trade_risk_dist_pct) / 100,
         setup_quality=algo_signal.volatility_risk
     )
 
@@ -160,6 +165,11 @@ async def analyze_stock(ticker: str, mode: Any = "all") -> AdvancedStockResponse
             tp_targets = [technicals.support_s1, technicals.support_s2]
             action = TradeAction.WAIT
 
+    # Calculate Risk-Managed Position Size (1% Account Risk Rule)
+    trade_risk_dist_pct = (abs(stop_loss - current_price) / current_price) * 100
+    if trade_risk_dist_pct < 0.1: trade_risk_dist_pct = 0.1
+    position_size_final = min(5.0, 1.0 / (trade_risk_dist_pct / 100))
+
     trade_setup = TradeSetup(
         action=action,
         confidence=ScoreDetail(
@@ -176,11 +186,11 @@ async def analyze_stock(ticker: str, mode: Any = "all") -> AdvancedStockResponse
         ),
         entry_zone=entry_zone,
         stop_loss=stop_loss,
-        stop_loss_pct=(abs(stop_loss - current_price) / current_price) * 100,
+        stop_loss_pct=trade_risk_dist_pct,
         take_profit_targets=tp_targets,
         risk_reward_ratio=2.0,
-        position_size_pct=min(5.0, 10.0 / technicals.atr_percent),
-        max_capital_at_risk=current_price * 0.02,
+        position_size_pct=position_size_final,
+        max_capital_at_risk=(position_size_final * trade_risk_dist_pct) / 100,
         setup_quality=algo_signal.volatility_risk
     )
 
