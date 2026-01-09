@@ -171,3 +171,59 @@ http://127.0.0.1:8000/analyze/RELIANCE.NS
   },
   "timestamp": "2026-01-09T17:41:01.064472"
 }
+
+
+ Assuming your server is running locally on the default port (8000), here are all the endpoints with their full URLs. You can replace 127.0.0.1 with your server's IP if accessing remotely.
+
+  1. AI-Powered Analysis (The "Complete" Engine)
+  These endpoints analyze Technicals, Fundamentals, and Market Sentiment through the lens of your Trading Framework.
+
+   * Complete Multi-Horizon Analysis:
+      http://127.0.0.1:8000/analyze/SI=F
+   * Intraday Mode (Strict 15m/5m Price Action):
+      http://127.0.0.1:8000/analyze/SI=F?mode=intraday
+   * Swing Mode (Daily Structure + Fundamental Health):
+      http://127.0.0.1:8000/analyze/SI=F?mode=swing
+   * Positional Mode (Macro Trends + High-Level Metrics):
+      http://127.0.0.1:8000/analyze/SI=F?mode=positional
+   * Long-Term Mode (Value Analysis + Debt/Equity):
+      http://127.0.0.1:8000/analyze/SI=F?mode=longterm
+
+  ---
+
+  2. Raw Data & Quantitative Endpoints
+  Use these for purely mathematical data without AI interpretation.
+
+   * Technical Analysis (RSI, MACD, BB, S/R Levels):
+      http://127.0.0.1:8000/technical/SI=F
+   * Fundamental Data (P/E, Debt/Equity, Revenue Growth):
+      http://127.0.0.1:8000/fundamentals/SI=F
+
+  ---
+
+  3. System & Monitoring
+   * Health Check (API Status):
+      http://127.0.0.1:8000/health
+   * Prometheus Metrics (Performance Tracking):
+      http://127.0.0.1:8000/metrics
+
+  ---
+
+  Quick Note on Query Parameters:
+  For the /analyze endpoint, the mode parameter is case-sensitive and must be one of:
+  intraday, swing, positional, longterm, or all.
+
+
+  ✦ The API is now fully modular. Here is the final consolidated list of URLs:
+
+  Category 1: Quantitative Data (Fast/Instant)
+   * Technicals: http://127.0.0.1:8000/technical/AAPL
+   * Fundamentals: http://127.0.0.1:8000/fundamentals/AAPL
+   * Smart Money (Context): http://127.0.0.1:8000/context/AAPL
+
+  Category 2: Qualitative Assessment (AI/Slow)
+   * Complete Report: http://127.0.0.1:8000/analyze/AAPL?mode=swing
+
+  Category 3: Monitoring
+   * Health: http://127.0.0.1:8000/health
+   * Metrics: http://127.0.0.1:8000/metrics

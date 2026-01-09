@@ -15,7 +15,8 @@ async def interpret_advanced(
     company_info: dict,
     mode: str = "all",
     fundamentals: Any = None,
-    market_context: Any = None
+    market_context: Any = None,
+    system_context: str = ""
 ) -> AIAnalysisResult | None:
     if not client:
         return None
@@ -41,8 +42,6 @@ async def interpret_advanced(
     ## RECENT NEWS & CATALYSTS
     {news_list}
     """
-            # Temporarily clear news from object to avoid duplicate tokens in JSON dump
-            # We use a dict dump to avoid modifying the original object in place if needed
             fund_dict = fundamentals.model_dump()
             fund_dict.pop('news', None)
             fundamentals_json = json.dumps(fund_dict, indent=2)
@@ -63,6 +62,9 @@ async def interpret_advanced(
     prompt = f"""
     # QUANTITATIVE STOCK ANALYSIS FRAMEWORK
     
+    ## S-TIER SYSTEM INSTRUCTIONS (MANDATORY)
+    {system_context}
+    
     ## OPERATIONAL MODE: {mode.upper()}
     You are strictly analyzing in {mode.upper()} mode. 
     - If INTRADAY: Focus ONLY on short-term price action, volume anomalies, and 15M/5M structure. Ignore long-term fundamentals.
@@ -70,16 +72,18 @@ async def interpret_advanced(
     - If LONGTERM: Focus on Weekly structure and major moving averages. Heavily weigh fundamental health (Debt, Margins, Growth).
     
     ## CONTEXTUAL INTELLIGENCE INSTRUCTIONS
-    1. **Analyst Targets:** Compare the 'current_price' to the 'price_target.mean'. Is there implied upside?
-    2. **Smart Money:** Analyze 'insider_activity' and 'option_sentiment'. Are insiders buying? Is the Put/Call ratio bullish?
+    1. **Analyst Targets:** Compare the 'current_price' to the 'price_target.mean'. Is there implied upside? If upside > 50%, evaluate if it is realistic given the technical trend.
+    2. **Smart Money:** Analyze 'insider_activity' and 'option_sentiment'. If more than 3 insiders sold in the last 3 months, this is a HEAVY BEARISH catalyst. Do not dismiss it as "trading plans."
     3. **Event Risk:** Check 'events.earnings_date'. If within 7 days, flag as HIGH RISK.
     4. **Consensus:** Use 'consensus' to gauge broad market sentiment (e.g., "Strong Buy" count).
     
     ## DATA VALIDATION & ACCOUNTABILITY RULES (STRICT)
     1. **Stale Data:** If 'analyst_ratings' are provided, they have already been filtered for freshness (< 2 years). Use them with confidence.
     2. **Volatility Anomaly:** If 'option_sentiment.implied_volatility' > 100%, FLAG AS DATA ERROR in your summary and do not base strategy on it.
-    3. **Financial Logic:** If 'debt_to_equity' is null but 'total_cash' is extremely high, assume the company has a "Fortress Balance Sheet" (Net Cash).
-    4. **No Cowardice:** If 'algo_signal.overall_score' is >= 70 or <= -70, the quantitative system has HIGH CONVICTION. You MUST NOT recommend "WAIT" unless you provide a specific "Golden Filter" reason (e.g., Price vs 200 EMA conflict).
+    3. **Null Indicators:** If any technical indicator (e.g. 'cci', 'volume_ratio') is 'null' in the provided JSON, it means it is POISONED or DATA UNAVAILABLE. **Do NOT include it in the 'signals' list.** You must mention the missing data in the 'risk' or 'rationale' section instead.
+    4. **No Cowardice:** If the system status is REJECTED, you MUST set your response 'action' to 'REJECT'. You are forbidden from recommending a BUY/SELL.
+    5. **Rejection Protocol:** If the system status is REJECTED, do NOT discuss potential upside targets or 'what if' scenarios. Focus ONLY on the risks that triggered the rejection (e.g., Insider Selling, Weak Trend, Low Volume). Your output must be a 'risk report', not a 'trade plan'.
+    6. **Semantic Purity:** If an indicator value is extreme (e.g. CCI > 500) or flagged as invalid/null, do NOT describe it as 'extreme oversold'. Describe it as 'Data Unreliable' or 'Indicator Failure'. Do not build a thesis on broken data.
     
     ## TRADING RULES & CONSTITUTION
     {framework_content}
@@ -101,7 +105,7 @@ async def interpret_advanced(
         "executive_summary": "string",
         "investment_thesis": "string",
         "intraday": {{
-            "action": "BUY/SELL/HOLD/WAIT",
+            "action": "STRICTLY ONE OF: BUY, SELL, HOLD, WAIT",
             "confidence": {{ "value": 0.0, "min_value": 0.0, "max_value": 100.0, "label": "string", "legend": "0-100 scale" }},
             "entry_price": 0.0,
             "target_price": 0.0,

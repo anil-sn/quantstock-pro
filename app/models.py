@@ -15,6 +15,7 @@ class TrendDirection(str, Enum):
     BEARISH = "Bearish"
     NEUTRAL = "Neutral"
     SIDEWAYS = "Sideways"
+    NEUTRAL_TRANSITION = "Neutral / Transition"
 
 class RiskLevel(str, Enum):
     LOW = "Low"
@@ -22,42 +23,82 @@ class RiskLevel(str, Enum):
     HIGH = "High"
     VERY_HIGH = "Very High"
 
+class SetupState(str, Enum):
+    VALID = "VALID"
+    DEGRADED = "DEGRADED"
+    INVALID = "INVALID"
+
+class SetupQuality(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+class DataIntegrity(str, Enum):
+    VALID = "VALID"
+    DEGRADED = "DEGRADED"
+    INVALID = "INVALID"
+
+class DecisionState(str, Enum):
+    ACCEPT = "ACCEPT"
+    WAIT = "WAIT"
+    REJECT = "REJECT"
+
 class TradeAction(str, Enum):
     BUY = "BUY"
     SELL = "SELL"
     HOLD = "HOLD"
     WAIT = "WAIT"
+    REJECT = "REJECT" # Keep for backward compatibility/internal mapping if needed, or deprecate.
+    # Actually, the system uses TradeAction heavily. Let's keep it but use DecisionState to govern it.
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if not isinstance(value, str):
+            return super()._missing_(value)
+        v = value.upper()
+        if "ACCUMULATE" in v or "ADD" in v:
+            return cls.BUY
+        if "REDUCE" in v or "TRIM" in v:
+            return cls.SELL
+        if "NEUTRAL" in v:
+            return cls.HOLD
+        return super()._missing_(value)
+
+class DataValidity(str, Enum): # Deprecated in favor of DataIntegrity but kept if needed, or aliased.
+    VALID = "VALID"
+    DEGRADED = "DEGRADED"
+    INVALID = "INVALID"
 
 class Technicals(BaseModel):
-    rsi: float
+    rsi: Optional[float] = None
     rsi_signal: TrendDirection
-    macd_line: float
-    macd_signal: float
-    macd_histogram: float
-    adx: float
-    atr: float
-    atr_percent: float
-    cci: float
-    bb_upper: float
-    bb_middle: float
-    bb_lower: float
-    bb_position: float
-    support_s1: float
-    support_s2: float
-    resistance_r1: float
-    resistance_r2: float
-    volume_avg_20d: float
-    volume_current: float
-    volume_ratio: float
-    ema_20: float
-    ema_50: float
-    ema_200: float
+    macd_line: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    adx: Optional[float] = None
+    atr: Optional[float] = None
+    atr_percent: Optional[float] = None
+    cci: Optional[float] = None
+    bb_upper: Optional[float] = None
+    bb_middle: Optional[float] = None
+    bb_lower: Optional[float] = None
+    bb_position: Optional[float] = None
+    support_s1: Optional[float] = None
+    support_s2: Optional[float] = None
+    resistance_r1: Optional[float] = None
+    resistance_r2: Optional[float] = None
+    volume_avg_20d: Optional[float] = None
+    volume_current: Optional[float] = None
+    volume_ratio: Optional[float] = None
+    ema_20: Optional[float] = None
+    ema_50: Optional[float] = None
+    ema_200: Optional[float] = None
     trend_structure: TrendDirection
 
 class SignalImpact(BaseModel):
     indicator: str
     direction: Literal["Bullish", "Bearish", "Neutral"]
-    weight: int = Field(..., ge=1, le=10, description="Significance of this indicator to the thesis (1-10)")
+    weight: int = Field(..., ge=0, le=10, description="Significance of this indicator to the thesis (0-10)")
     value_at_analysis: Union[float, str, None] = None
 
     @field_validator('direction', mode='before')
@@ -93,7 +134,8 @@ class TradeSetup(BaseModel):
     risk_reward_ratio: float
     position_size_pct: float
     max_capital_at_risk: float
-    setup_quality: RiskLevel
+    setup_state: SetupState = SetupState.INVALID
+    setup_quality: Optional[SetupQuality] = None
 
 class AlgoSignal(BaseModel):
     overall_score: ScoreDetail
@@ -103,6 +145,7 @@ class AlgoSignal(BaseModel):
     volume_score: ScoreDetail
     volatility_risk: RiskLevel
     trend_strength: str
+    confluence_score: int = 0
 
 class RiskMetrics(BaseModel):
     sharpe_ratio: Optional[float] = None
@@ -141,6 +184,7 @@ class AIAnalysisResult(BaseModel):
 
 class StockOverview(BaseModel):
     action: TradeAction
+    decision_state: DecisionState = DecisionState.WAIT
     current_price: float
     target_price: float
     stop_loss: float
@@ -157,7 +201,10 @@ class TechnicalStockResponse(BaseModel):
     technicals: Technicals
     algo_signal: AlgoSignal
     trade_setup: TradeSetup
-    risk_metrics: RiskMetrics
+    risk_metrics: Optional[RiskMetrics] = None # Optional now
+    data_confidence: float = 100.0
+    data_integrity: DataIntegrity = DataIntegrity.VALID
+    decision_state: DecisionState = DecisionState.WAIT
     timestamp: datetime = Field(default_factory=datetime.now)
 
 class AnalystRating(BaseModel):
@@ -225,8 +272,11 @@ class AdvancedStockResponse(BaseModel):
     algo_signal: AlgoSignal
     trade_setup: TradeSetup
     ai_analysis: AIAnalysisResult
-    risk_metrics: RiskMetrics
+    risk_metrics: Optional[RiskMetrics] = None # Optional now
     market_context: Optional[MarketContext] = None
+    data_confidence: float = 100.0
+    data_integrity: DataIntegrity = DataIntegrity.VALID
+    decision_state: DecisionState = DecisionState.WAIT
     timestamp: datetime = Field(default_factory=datetime.now)
 
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})

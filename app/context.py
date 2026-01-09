@@ -102,19 +102,30 @@ def get_market_context(ticker: str) -> MarketContext:
     try:
         insiders = stock.insider_transactions
         if insiders is not None and not insiders.empty:
-            latest = insiders.head(5)
+            latest = insiders.head(10) # Look deeper
+            material_trades = []
+            
             for _, row in latest.iterrows():
+                val = float(row.get('Value', 0.0) or 0.0)
+                shares = int(row.get('Shares', 0) or 0)
+                
+                # Filter noise: Only care about > $100k or > 5000 shares
+                if val < 100000 and shares < 5000:
+                    continue
+                    
                 txn_text = row.get('Text', '')
                 txn_type = "Buy" if "Purchase" in txn_text or "Buy" in txn_text else "Sell"
                 
-                context.insider_activity.append(InsiderTrade(
+                material_trades.append(InsiderTrade(
                     date=str(row.get('Start Date', '')),
                     insider_name=row.get('Insider', 'Unknown'),
                     position=row.get('Position', ''),
                     transaction_type=txn_type,
-                    shares=int(row.get('Shares', 0)),
-                    value=sanitize(float(row.get('Value', 0.0)))
+                    shares=shares,
+                    value=sanitize(val)
                 ))
+            
+            context.insider_activity = material_trades[:5] # Keep top 5 material
     except Exception:
         pass
 
@@ -138,6 +149,12 @@ def get_market_context(ticker: str) -> MarketContext:
                 
                 avg_iv = calls['impliedVolatility'].mean() if 'impliedVolatility' in calls else 0.0
                 
+                # --- Fix #5: Kill-switch for absurd IV ---
+                if avg_iv > 1.0:
+                    context.option_sentiment = None
+                    return context # Early return or just skip assignment
+                # ----------------------------------------
+
                 # Identify Option Walls (Support/Resistance)
                 max_call_oi = 0
                 max_call_strike = 0.0
