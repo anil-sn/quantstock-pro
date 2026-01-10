@@ -3,6 +3,7 @@ from typing import List, Optional, Dict, Tuple, Any, Literal, Union
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from datetime import datetime
 
+# --- ENUMS ---
 class AnalysisMode(str, Enum):
     INTRADAY = "intraday"
     SWING = "swing"
@@ -17,16 +18,31 @@ class TrendDirection(str, Enum):
     SIDEWAYS = "Sideways"
     NEUTRAL_TRANSITION = "Neutral / Transition"
 
+class QualityGrade(str, Enum):
+    A_PLUS = "A+"
+    A = "A"
+    A_MINUS = "A-"
+    B_PLUS = "B+"
+    B = "B"
+    B_MINUS = "B-"
+    C_PLUS = "C+"
+    C = "C"
+    C_MINUS = "C-"
+    D = "D"
+    F = "F"
+
 class RiskLevel(str, Enum):
     LOW = "Low"
     MODERATE = "Moderate"
     HIGH = "High"
     VERY_HIGH = "Very High"
+    UNKNOWN = "Unknown"
 
 class SetupState(str, Enum):
     VALID = "VALID"
     DEGRADED = "DEGRADED"
     INVALID = "INVALID"
+    SKIPPED = "SKIPPED"
 
 class SetupQuality(str, Enum):
     LOW = "LOW"
@@ -37,6 +53,33 @@ class DataIntegrity(str, Enum):
     VALID = "VALID"
     DEGRADED = "DEGRADED"
     INVALID = "INVALID"
+    NOT_EVALUATED = "NOT_EVALUATED"
+
+class PipelineStageState(str, Enum):
+    PASSED = "PASSED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+    ERROR = "ERROR"
+    PANIC = "PANIC"
+
+class SensorStatus(BaseModel):
+    status: PipelineStageState
+    latency_ms: Optional[float] = None
+    message: Optional[str] = None
+
+class PipelineTrace(BaseModel):
+    layer_0_prescreen: SensorStatus
+    layer_1_sensors: Dict[str, SensorStatus]
+    layer_2_scoring: SensorStatus
+    layer_3_synthesis: SensorStatus
+    layer_4_audit: SensorStatus
+
+class PipelineState(BaseModel):
+    pre_screen: PipelineStageState
+    technicals: PipelineStageState
+    scoring: PipelineStageState
+    execution: PipelineStageState
+    trace: Optional[PipelineTrace] = None
 
 class DecisionState(str, Enum):
     ACCEPT = "ACCEPT"
@@ -48,8 +91,8 @@ class TradeAction(str, Enum):
     SELL = "SELL"
     HOLD = "HOLD"
     WAIT = "WAIT"
-    REJECT = "REJECT" # Keep for backward compatibility/internal mapping if needed, or deprecate.
-    # Actually, the system uses TradeAction heavily. Let's keep it but use DecisionState to govern it.
+    REJECT = "REJECT"
+    PROBE = "PROBE" # Small tactical entry in ambiguous but positive expectancy states
 
     @classmethod
     def _missing_(cls, value: object) -> Any:
@@ -62,12 +105,282 @@ class TradeAction(str, Enum):
             return cls.SELL
         if "NEUTRAL" in v:
             return cls.HOLD
+        if "PROBE" in v:
+            return cls.PROBE
         return super()._missing_(value)
 
-class DataValidity(str, Enum): # Deprecated in favor of DataIntegrity but kept if needed, or aliased.
-    VALID = "VALID"
-    DEGRADED = "DEGRADED"
-    INVALID = "INVALID"
+# --- SUB-MODELS ---
+class ExpectancyDetail(BaseModel):
+    p_win: float # 0.0 to 1.0
+    expected_value: float # Profit factor per unit risked
+    regime_edge: str # Description of the specific edge found
+
+class SentimentDetail(BaseModel):
+    label: str
+    score: float
+    confidence: str
+
+class InferenceDetail(BaseModel):
+    label: str
+    status: str
+    description: str
+
+class MetricItem(BaseModel):
+    category: str
+    metric: str
+    value: str
+    assessment: str
+    percentile: Optional[float] = None
+
+class Scenario(BaseModel):
+    probability: float
+    revenue_growth_assumption: float
+    operating_margin_assumption: float
+    target_price: float
+    annualized_return: float
+    time_horizon: str
+    trigger_conditions: Optional[List[str]] = None
+
+class PeerMetric(BaseModel):
+    metric: str
+    value: float
+    sector_average: float
+    percentile: float
+    z_score: float
+    status: str
+
+class TrendDelta(BaseModel):
+    metric: str
+    current: float
+    previous: float
+    delta_pct: float
+    status: str
+    interpretation: str
+
+class TrendAnalysis(BaseModel):
+    deltas: List[TrendDelta]
+    summary: str
+    trajectory: str
+
+class ReliabilityAssessment(BaseModel):
+    score: float
+    adjustment_factor: float
+    confidence_level: str
+    data_mix_quality: str
+
+class ScoreDetail(BaseModel):
+    value: float
+    min_value: float
+    max_value: float
+    label: str
+    legend: str
+
+# --- COMPREHENSIVE OUTPUT MODEL ---
+class AdvancedFundamentalAnalysis(BaseModel):
+    analytical_engine: Dict[str, Any]
+    analysis_header: Dict[str, Any]
+    executive_summary: Dict[str, Any]
+    comprehensive_metrics: Dict[str, Any]
+    comparative_analysis: Dict[str, Any]
+    trend_and_momentum: Dict[str, Any]
+    risk_assessment: Dict[str, Any]
+    investment_decision_framework: Dict[str, Any]
+    scenario_analysis: Dict[str, Any]
+    data_quality_and_assumptions: Dict[str, Any]
+    base_data: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any]
+
+# --- BASE DATA MODEL ---
+class AnalystEstimates(BaseModel):
+    target_mean_price: Optional[float] = None
+    target_median_price: Optional[float] = None
+    number_of_analysts: Optional[int] = None
+    recommendation_key: Optional[str] = None
+    recommendation_mean: Optional[float] = None
+
+class FundamentalInferences(BaseModel):
+    valuation: InferenceDetail
+    growth: InferenceDetail
+    health: InferenceDetail
+    efficiency: InferenceDetail
+    capital_allocation: InferenceDetail
+    earnings_quality: InferenceDetail
+    ownership_structure: InferenceDetail
+    overall_sentiment: SentimentDetail
+
+class RiskAssessment(BaseModel):
+    level: RiskLevel
+    score: int
+    factors: List[str]
+
+class FundamentalData(BaseModel):
+    ticker: str
+    asset_type: str = "Unknown"
+    company_name: Optional[str] = None
+    description: Optional[str] = None
+    industry: Optional[str] = None
+    sector: Optional[str] = None
+    exchange: Optional[str] = None
+    market_cap: Optional[float] = None
+    enterprise_value: Optional[float] = None
+    trailing_pe: Optional[float] = None
+    forward_pe: Optional[float] = None
+    rev_growth_adjusted_pe: Optional[float] = None
+    price_to_sales: Optional[float] = None
+    price_to_book: Optional[float] = None
+    enterprise_to_ebitda: Optional[float] = None
+    enterprise_to_revenue: Optional[float] = None
+    earnings_yield: Optional[float] = None
+    book_value: Optional[float] = None
+    dividend_rate: Optional[float] = None
+    profit_margin: Optional[float] = None
+    gross_margins: Optional[float] = None
+    operating_margins: Optional[float] = None
+    ebitda_margins: Optional[float] = None
+    ebitda: Optional[float] = None
+    return_on_equity: Optional[float] = None
+    return_on_assets: Optional[float] = None
+    return_on_invested_capital: Optional[float] = None
+    invested_capital: Optional[float] = None
+    free_cash_flow: Optional[float] = None
+    operating_cash_flow: Optional[float] = None
+    net_income: Optional[float] = None
+    total_revenue: Optional[float] = None
+    free_cash_flow_margin: Optional[float] = None
+    fcf_to_net_income_ratio: Optional[float] = None
+    revenue_growth: Optional[float] = None
+    earnings_growth: Optional[float] = None
+    fcf_growth: Optional[float] = None
+    lifecycle_stage: str = "Unknown"
+    total_debt: Optional[float] = None
+    total_cash: Optional[float] = None
+    net_cash: Optional[float] = None
+    net_cash_status: str = "Neutral"
+    debt_to_equity: Optional[float] = None
+    current_ratio: Optional[float] = None
+    quick_ratio: Optional[float] = None
+    interest_coverage: Optional[float] = None
+    dividend_yield: Optional[float] = None
+    payout_ratio: Optional[float] = None
+    held_percent_institutions: Optional[float] = None
+    held_percent_insiders: Optional[float] = None
+    overall_risk_score: Optional[float] = None
+    audit_risk_score: Optional[float] = None
+    board_risk_score: Optional[float] = None
+    shares_outstanding: Optional[int] = None
+    float_shares: Optional[int] = None
+    analyst_estimates: Optional[AnalystEstimates] = None
+    inferences: Optional[FundamentalInferences] = None
+    risk_assessment: Optional[RiskAssessment] = None
+    trend_analysis: Optional[TrendAnalysis] = None
+    quality_score: Optional["CompositeQualityScore"] = None
+    last_updated: datetime = Field(default_factory=datetime.now)
+
+class NewsItem(BaseModel):
+    title: str
+    publisher: str
+    link: str
+    publish_time: int
+
+class NewsSignal(BaseModel):
+    headline: str
+    signal_strength: float # -100 to 100
+    impact_category: str # "Momentum", "Hype", "Fundamental", "Risk"
+    is_primary_source: bool
+
+class NewsIntelligence(BaseModel):
+    signal_score: float # Weighted aggregate of signals
+    noise_ratio: float # Percentage of headlines classified as generic/hype
+    source_diversity: float # 0 to 1.0 (Unique Publishers / Total items)
+    narrative_trap_warning: bool
+    summary: str
+
+# --- RESEARCH MODELS ---
+class SourceCategory(str, Enum):
+    ACADEMIC = "academic"
+    GOVERNMENT = "government" # SEC, Regulators
+    PRIMARY_CORPORATE = "primary_corporate" # IR, Transcripts
+    NEWS = "news"
+    ANALYSIS = "analyst_research"
+    OTHER = "other"
+
+class ResearchSource(BaseModel):
+    title: str
+    url: str
+    category: SourceCategory
+    credibility_score: float # 0.0 to 1.0
+    publisher: Optional[str] = None
+
+class Finding(BaseModel):
+    fact: str
+    citation_indices: List[int] # Indices in the sources list
+    iteration: int
+
+class SourceDiversity(BaseModel):
+    category_distribution: Dict[SourceCategory, int]
+    overall_diversity_score: float # 0 to 1.0
+    is_diversified: bool
+    bias_warning: Optional[str] = None
+
+class ResearchIteration(BaseModel):
+    query: str
+    findings: List[Finding]
+    sources: List[ResearchSource]
+
+class ResearchReport(BaseModel):
+    ticker: str
+    synthesis: str # AI-generated with IEEE citations [1]
+    iterations: List[ResearchIteration]
+    diversity_metrics: SourceDiversity
+    total_sources: int
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+# --- OTHER SYSTEM MODELS ---
+class NewsResponse(BaseModel):
+    ticker: str
+    news: List[NewsItem]
+    intelligence: Optional[NewsIntelligence] = None
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class CompositeQualityScore(BaseModel):
+    """Comprehensive quality scoring system"""
+    overall_score: float
+    grade: QualityGrade
+    profitability_score: float
+    growth_score: float
+    financial_strength_score: float
+    business_model_score: float
+    management_score: float
+    consistency_score: float
+    components: Dict[str, Any]
+
+class BusinessModelAnalysis(BaseModel):
+    model_type: str
+    revenue_recurrence: float
+    customer_stickiness: str
+    competitive_advantages: List[str]
+    scalability_rating: str
+    market_position: str
+    industry_outlook: str
+
+class InvestmentThesis(BaseModel):
+    bull_case: str
+    bear_case: str
+    base_case: str
+
+class InvestmentRecommendation(BaseModel):
+    action: str
+    confidence: str
+    position_sizing: str
+    investment_horizon: str
+    key_risks: List[str]
+    monitoring_metrics: List[str]
+
+class QualityAssessment(BaseModel):
+    score: float
+    grade: QualityGrade
+    interpretation: str
+    component_scores: Dict[str, float]
 
 class Technicals(BaseModel):
     rsi: Optional[float] = None
@@ -113,13 +426,6 @@ class SignalImpact(BaseModel):
             return "Bearish"
         return "Neutral"
 
-class ScoreDetail(BaseModel):
-    value: float
-    min_value: float
-    max_value: float
-    label: str
-    legend: str
-
 class MarketSentiment(BaseModel):
     score: ScoreDetail
     fear_greed_index: ScoreDetail
@@ -127,13 +433,14 @@ class MarketSentiment(BaseModel):
 class TradeSetup(BaseModel):
     action: TradeAction
     confidence: ScoreDetail
-    entry_zone: Tuple[float, float]
-    stop_loss: float
-    stop_loss_pct: float
-    take_profit_targets: List[float]
-    risk_reward_ratio: float
-    position_size_pct: float
-    max_capital_at_risk: float
+    expectancy: Optional[ExpectancyDetail] = None
+    entry_zone: Optional[Tuple[float, float]] = None
+    stop_loss: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    take_profit_targets: Optional[List[float]] = None
+    risk_reward_ratio: Optional[float] = None
+    position_size_pct: Optional[float] = None
+    max_capital_at_risk: Optional[float] = None
     setup_state: SetupState = SetupState.INVALID
     setup_quality: Optional[SetupQuality] = None
 
@@ -165,44 +472,70 @@ class HorizonPerspective(BaseModel):
     rationale: str
 
 class OptionsAdvice(BaseModel):
-    strategy: str  # e.g., "Bull Call Spread", "Naked Put"
-    strike_price: float
+    strategy: str
+    strike_price: Optional[float] = None
     expiration_view: str
     rationale: str
     risk_reward: str
+    status: Literal["ACTIVE", "NOT_RECOMMENDED", "DATA_ABSENT"] = "ACTIVE"
+
+class WeightDetail(BaseModel):
+    component: str
+    weight: float
+    contribution: float
 
 class AIAnalysisResult(BaseModel):
     executive_summary: str
-    investment_thesis: str
-    intraday: HorizonPerspective
-    swing: HorizonPerspective
-    positional: HorizonPerspective
-    longterm: HorizonPerspective
-    options_fno: OptionsAdvice
-    market_sentiment: MarketSentiment
+    investment_thesis: Optional[str] = None
+    rejection_analysis: Optional[str] = None
+    intraday: Optional[HorizonPerspective] = None
+    swing: Optional[HorizonPerspective] = None
+    positional: Optional[HorizonPerspective] = None
+    longterm: Optional[HorizonPerspective] = None
+    options_fno: Optional[OptionsAdvice] = None
+    market_sentiment: Optional[MarketSentiment] = None
     institutional_insight: Optional[str] = None
+    consensus_weights: Optional[List[WeightDetail]] = None
 
 class StockOverview(BaseModel):
     action: TradeAction
-    decision_state: DecisionState = DecisionState.WAIT
     current_price: float
-    target_price: float
-    stop_loss: float
+    target_price: Optional[float] = None
+    stop_loss: Optional[float] = None
     confidence: ScoreDetail
     summary: str
 
+class OHLCV(BaseModel):
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+class MultiHorizonSetups(BaseModel):
+    intraday: Optional[TradeSetup] = None
+    swing: Optional[TradeSetup] = None
+    positional: Optional[TradeSetup] = None
+    longterm: Optional[TradeSetup] = None
+
 class TechnicalStockResponse(BaseModel):
     overview: StockOverview
+    requested_ticker: str
     ticker: str
     company_name: Optional[str] = None
     sector: Optional[str] = None
     current_price: float
     price_change_1d: Optional[float] = None
-    technicals: Technicals
-    algo_signal: AlgoSignal
+    technicals: Optional[Technicals] = None
+    algo_signal: Optional[AlgoSignal] = None
     trade_setup: TradeSetup
-    risk_metrics: Optional[RiskMetrics] = None # Optional now
+    horizons: Optional[MultiHorizonSetups] = None
+    raw_data: Optional[List[OHLCV]] = None
+    risk_metrics: Optional[RiskMetrics] = None
+    pipeline_state: Optional[PipelineState] = None
     data_confidence: float = 100.0
+    is_trade_authorized: bool = False
     data_integrity: DataIntegrity = DataIntegrity.VALID
     decision_state: DecisionState = DecisionState.WAIT
     timestamp: datetime = Field(default_factory=datetime.now)
@@ -210,14 +543,14 @@ class TechnicalStockResponse(BaseModel):
 class AnalystRating(BaseModel):
     firm: str
     to_grade: str
-    action: str  # e.g., "up", "down", "init"
+    action: str
     date: str
 
 class InsiderTrade(BaseModel):
     date: str
     insider_name: str
     position: str
-    transaction_type: str  # "Buy" or "Sell"
+    transaction_type: str
     shares: int
     value: float
 
@@ -225,7 +558,7 @@ class OptionSentiment(BaseModel):
     put_call_ratio: float
     implied_volatility: float
     total_open_interest: int
-    sentiment: str  # "Bullish", "Bearish", "Neutral"
+    sentiment: str
     max_pain: Optional[float] = None
     highest_call_oi_strike: Optional[float] = None
     highest_put_oi_strike: Optional[float] = None
@@ -238,7 +571,7 @@ class AnalystPriceTarget(BaseModel):
     median: Optional[float] = None
 
 class AnalystConsensus(BaseModel):
-    period: str  # e.g. "0m"
+    period: str
     strong_buy: int = 0
     buy: int = 0
     hold: int = 0
@@ -259,22 +592,40 @@ class MarketContext(BaseModel):
     price_target: Optional[AnalystPriceTarget] = None
     consensus: Optional[AnalystConsensus] = None
     events: Optional[UpcomingEvents] = None
-    
+
+class TradingDecision(BaseModel):
+    decision_state: DecisionState
+    setup_state: SetupState
+    confidence: float
+    primary_reason: str
+    violation_rules: List[str]
+    position_size_pct: Optional[float] = 0.0
+    max_capital_at_risk: Optional[float] = 0.0
+    risk_reward_ratio: Optional[float] = 0.0
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    tp_targets: Optional[List[float]] = None
+    entry_zone: Optional[Tuple[float, float]] = None
+    setup_quality: Optional[SetupQuality] = None
+
 class AdvancedStockResponse(BaseModel):
     analysis_mode: AnalysisMode = AnalysisMode.ALL
     overview: StockOverview
+    requested_ticker: str
     ticker: str
     company_name: Optional[str] = None
     sector: Optional[str] = None
     current_price: float
     price_change_1d: Optional[float] = None
-    technicals: Technicals
-    algo_signal: AlgoSignal
+    technicals: Optional[Technicals] = None
+    algo_signal: Optional[AlgoSignal] = None
     trade_setup: TradeSetup
-    ai_analysis: AIAnalysisResult
-    risk_metrics: Optional[RiskMetrics] = None # Optional now
+    ai_analysis: Optional[AIAnalysisResult] = None
+    risk_metrics: Optional[RiskMetrics] = None
     market_context: Optional[MarketContext] = None
+    pipeline_state: Optional[PipelineState] = None
     data_confidence: float = 100.0
+    is_trade_authorized: bool = False
     data_integrity: DataIntegrity = DataIntegrity.VALID
     decision_state: DecisionState = DecisionState.WAIT
     timestamp: datetime = Field(default_factory=datetime.now)

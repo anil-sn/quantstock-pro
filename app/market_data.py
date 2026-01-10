@@ -3,7 +3,9 @@ import yfinance as yf
 import pandas as pd
 from typing import Dict, Any
 from fastapi.concurrency import run_in_threadpool
+from async_lru import alru_cache
 
+@alru_cache(maxsize=128, ttl=300)
 async def fetch_stock_data(ticker: str, interval: str = "1d") -> Dict[str, Any]:
     """Fetch comprehensive stock data with validation"""
     try:

@@ -21,6 +21,11 @@ dependencies = [
     "async-lru>=2.0.4",
     "tenacity>=8.2.3",
     "prometheus-fastapi-instrumentator>=6.1.0",
+    "sentry-sdk[fastapi]>=1.40.0",
+    "python-dateutil>=2.8.2",
+    "newsapi-python>=0.2.7",
+    "tomlkit>=0.12.0",
+    "rich>=13.7.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +37,9 @@ dev = [
     "ruff>=0.3.0",
     "mypy>=1.8.0",
 ]
+
+[tool.setuptools]
+packages = ["app"]
 
 [build-system]
 requires = ["setuptools>=68.0"]

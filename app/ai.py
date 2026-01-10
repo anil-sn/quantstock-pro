@@ -1,29 +1,68 @@
 import json
 import re
-from typing import Any
+from typing import Any, List, Optional
 from pathlib import Path
 from google import genai
 from google.genai import types
+from async_lru import alru_cache
 from .models import Technicals, AIAnalysisResult, MarketSentiment
 from .settings import settings
 
 client = genai.Client(api_key=settings.GEMINI_API_KEY) if settings.GEMINI_API_KEY else None
 
+def sanitize_prompt_text(text: str) -> str:
+    """Sanitize text to prevent prompt injection by removing common escape sequences/tags."""
+    if not text:
+        return ""
+    # Remove markers that could be used to escape blocks or inject system commands
+    text = text.replace("```", "'''")
+    text = text.replace("#", "-") # Prevent header injection
+    return text
+
+from .models import Technicals, AIAnalysisResult, MarketSentiment, TechnicalStockResponse, AdvancedFundamentalAnalysis, NewsResponse, MarketContext
+from .settings import settings
+from .logger import pipeline_logger
+
+client = genai.Client(api_key=settings.GEMINI_API_KEY) if settings.GEMINI_API_KEY else None
+
+def sanitize_prompt_text(text: str) -> str:
+    """Sanitize text to prevent prompt injection by removing common escape sequences/tags."""
+    if not text:
+        return ""
+    # Remove markers that could be used to escape blocks or inject system commands
+    text = text.replace("```", "'''")
+    text = text.replace("#", "-") # Prevent header injection
+    return text
+
 async def interpret_advanced(
-    ticker: str, 
-    technicals: Technicals, 
-    company_info: dict,
+    technical_response: TechnicalStockResponse,
+    fundamental_response: Optional[AdvancedFundamentalAnalysis] = None,
+    news_response: Optional[NewsResponse] = None,
+    market_context: Optional[MarketContext] = None,
     mode: str = "all",
-    fundamentals: Any = None,
-    market_context: Any = None,
-    system_context: str = ""
+    system_instruction: str = ""
 ) -> AIAnalysisResult | None:
     if not client:
         return None
 
+    # Extract Core Data
+    ticker = technical_response.ticker
+    technicals = technical_response.technicals
+    
+    # Construct Company Info
+    company_info = {
+        "longName": technical_response.company_name,
+        "sector": technical_response.sector,
+        "current_price": technical_response.current_price
+    }
+
+    # Sanitize inputs that could be malicious
+    system_instruction = sanitize_prompt_text(system_instruction)
+    ticker = sanitize_prompt_text(ticker)
+    
     # Load Framework
     try:
-        framework_path = Path(__file__).parent.parent / "THE_COMPLETE_FRAMEWORK.md"
+        framework_path = Path(__file__).parent.parent / "docs/THE_COMPLETE_FRAMEWORK.md"
         framework_content = framework_path.read_text(encoding="utf-8")
     except Exception as e:
         print(f"Warning: Could not load framework: {e}")
@@ -33,24 +72,31 @@ async def interpret_advanced(
     news_section = ""
     context_section = ""
     
-    if fundamentals:
-        # Extract news to format it nicely
-        news_items = getattr(fundamentals, 'news', [])
-        if news_items:
-            news_list = "\n".join([f"- {n.title} ({n.publisher})" for n in news_items])
-            news_section = f"""
+    if fundamental_response:
+        fundamentals_json = fundamental_response.model_dump_json(indent=2)
+        fundamentals_section = f"""
+    ## FUNDAMENTAL DATA & INFERENCES
+    {fundamentals_json}
+    """
+
+    if news_response and news_response.news:
+        news_list = "\n".join([f"- {sanitize_prompt_text(n.title)} ({sanitize_prompt_text(n.publisher)})" for n in news_response.news])
+        intelligence_section = ""
+        if news_response.intelligence:
+            intel = news_response.intelligence
+            intelligence_section = f"""
+    ### NEWS INTELLIGENCE (SCANNED)
+    - Signal Score: {intel.signal_score}
+    - Noise Ratio: {intel.noise_ratio}%
+    - Source Diversity: {intel.source_diversity}
+    - Narrative Trap Warning: {intel.narrative_trap_warning}
+    - Summary: {intel.summary}
+    """
+        
+        news_section = f"""
     ## RECENT NEWS & CATALYSTS
     {news_list}
-    """
-            fund_dict = fundamentals.model_dump()
-            fund_dict.pop('news', None)
-            fundamentals_json = json.dumps(fund_dict, indent=2)
-        else:
-            fundamentals_json = fundamentals.model_dump_json(indent=2)
-            
-        fundamentals_section = f"""
-    ## FUNDAMENTAL DATA
-    {fundamentals_json}
+    {intelligence_section}
     """
 
     if market_context:
@@ -59,11 +105,40 @@ async def interpret_advanced(
     {market_context.model_dump_json(indent=2)}
     """
 
+    # If system instruction is empty, derive it from Technical Response
+    is_diagnostic = technical_response.decision_state != "ACCEPT"
+    
+    if not system_instruction:
+        decision_state = technical_response.decision_state.value
+        reason = technical_response.overview.summary
+        conf = technical_response.data_confidence
+        
+        system_instruction = f"""
+        DECISION STATE: {decision_state}
+        PRIMARY REASON: {reason}
+        CONFIDENCE: {conf:.1f}/100
+        """
+        if is_diagnostic:
+            system_instruction += "\nMODE: DIAGNOSTIC/POST-MORTEM. Do NOT suggest trades. Explain the VETO."
+
+    # --- AUDIT FIX: THE DIAGNOSTIC CONTRACT ---
+    diagnostic_constraint = ""
+    if is_diagnostic:
+        diagnostic_constraint = """
+        CRITICAL: The system has issued a WAIT or REJECT order. 
+        1. YOU ARE FORBIDDEN from writing an 'investment_thesis' that suggests upside or entry.
+        2. Change 'investment_thesis' to 'rejection_analysis'.
+        3. Your tone must be clinical and risk-focused.
+        4. No directional 'action' other than WAIT or REJECT.
+        """
+
     prompt = f"""
     # QUANTITATIVE STOCK ANALYSIS FRAMEWORK
     
+    {diagnostic_constraint}
+    
     ## S-TIER SYSTEM INSTRUCTIONS (MANDATORY)
-    {system_context}
+    {system_instruction}
     
     ## OPERATIONAL MODE: {mode.upper()}
     You are strictly analyzing in {mode.upper()} mode. 
@@ -80,10 +155,11 @@ async def interpret_advanced(
     ## DATA VALIDATION & ACCOUNTABILITY RULES (STRICT)
     1. **Stale Data:** If 'analyst_ratings' are provided, they have already been filtered for freshness (< 2 years). Use them with confidence.
     2. **Volatility Anomaly:** If 'option_sentiment.implied_volatility' > 100%, FLAG AS DATA ERROR in your summary and do not base strategy on it.
-    3. **Null Indicators:** If any technical indicator (e.g. 'cci', 'volume_ratio') is 'null' in the provided JSON, it means it is POISONED or DATA UNAVAILABLE. **Do NOT include it in the 'signals' list.** You must mention the missing data in the 'risk' or 'rationale' section instead.
-    4. **No Cowardice:** If the system status is REJECTED, you MUST set your response 'action' to 'REJECT'. You are forbidden from recommending a BUY/SELL.
-    5. **Rejection Protocol:** If the system status is REJECTED, do NOT discuss potential upside targets or 'what if' scenarios. Focus ONLY on the risks that triggered the rejection (e.g., Insider Selling, Weak Trend, Low Volume). Your output must be a 'risk report', not a 'trade plan'.
-    6. **Semantic Purity:** If an indicator value is extreme (e.g. CCI > 500) or flagged as invalid/null, do NOT describe it as 'extreme oversold'. Describe it as 'Data Unreliable' or 'Indicator Failure'. Do not build a thesis on broken data.
+    3. **Null Indicators:** If any technical indicator (e.g. 'cci', 'volume_ratio') is 'null', YOU ARE FORBIDDEN from describing it as 'Neutral'. Describe it as 'Data Unreliable' or 'Indicator Failure'.
+    4. **No Cowardice:** If the system status is REJECTED or WAIT, you MUST set your response 'action' to 'REJECT' or 'WAIT'. 
+    5. **Options Lock:** If 'option_sentiment' is null, YOU ARE FORBIDDEN from suggesting a strategy, strike price, or expiration. You must return status 'DATA_ABSENT' and strategy 'NONE'.
+    6. **Confidence Ceiling:** Your horizon confidence values CANNOT exceed the System Confidence provided.
+    7. **Indicator Semantics:** 'bb_position' values: 0.0 = Lower Band (Oversold/Support), 1.0 = Upper Band (Overbought/Resistance). A value of 0.01 is EXTREME OVERSOLD, not bearish.
     
     ## TRADING RULES & CONSTITUTION
     {framework_content}
@@ -92,7 +168,7 @@ async def interpret_advanced(
     You are a professional multi-horizon trader. Analyze {ticker}.
     
     ## COMPANY OVERVIEW
-    {json.dumps({k: company_info.get(k) for k in ['longName', 'sector', 'industry', 'marketCap']}, indent=2)}
+    {json.dumps(company_info, indent=2)}
     
     ## QUANTITATIVE METRICS
     {technicals.model_dump_json(indent=2)}
@@ -138,6 +214,8 @@ async def interpret_advanced(
     }}
     """
 
+    pipeline_logger.log_payload(ticker, "LAYER_3", "GEMINI_INPUT_PROMPT", prompt)
+
     try:
         response = client.models.generate_content(
             model=settings.GEMINI_MODEL,
@@ -150,6 +228,7 @@ async def interpret_advanced(
         
         text = response.text.strip()
         clean_json = re.sub(r"```json\s?|\s?```", "", text).strip()
+        pipeline_logger.log_payload(ticker, "LAYER_3", "GEMINI_OUTPUT_RAW", clean_json)
         result = json.loads(clean_json)
         
         return AIAnalysisResult(**result)

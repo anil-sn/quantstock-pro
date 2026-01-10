@@ -4,6 +4,7 @@ import numpy as np
 import math
 from typing import List, Optional
 from datetime import datetime, timedelta
+from cachetools import cached, TTLCache
 from .models import MarketContext, AnalystRating, InsiderTrade, OptionSentiment, AnalystPriceTarget, AnalystConsensus, UpcomingEvents
 
 def sanitize(val):
@@ -13,6 +14,7 @@ def sanitize(val):
         return None
     return val
 
+@cached(cache=TTLCache(maxsize=128, ttl=300))
 def get_market_context(ticker: str) -> MarketContext:
     stock = yf.Ticker(ticker)
     context = MarketContext()
