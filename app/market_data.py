@@ -5,27 +5,31 @@ from typing import Dict, Any
 from fastapi.concurrency import run_in_threadpool
 from async_lru import alru_cache
 
+from .providers.factory import ProviderFactory
+from .exceptions import TickerNotFoundError, SensorError, LiquidityHaltError
+
 @alru_cache(maxsize=128, ttl=300)
 async def fetch_stock_data(ticker: str, interval: str = "1d") -> Dict[str, Any]:
-    """Fetch comprehensive stock data with validation"""
+    """Fetch comprehensive stock data using multi-vendor failover."""
+    # Determine period based on interval
+    period = "1y"
+    if interval in ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"]:
+        period = "60d"
+
     try:
-        stock = yf.Ticker(ticker)
-        
-        # Determine period based on interval to ensure enough data
-        period = "1y"
-        if interval in ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"]:
-            period = "1mo"  # Short period for intraday to save tokens/time
-        
-        # Get info and history in parallel
-        info_future = run_in_threadpool(lambda: stock.info)
-        history_future = run_in_threadpool(
-            lambda: stock.history(period=period, interval=interval)
+        # Fetch history with failover
+        df, provider_name = await ProviderFactory.fetch_with_failover(
+            "fetch_price_history", ticker=ticker, interval=interval, period=period
         )
         
-        info, df = await asyncio.gather(info_future, history_future)
-        
-        if df.empty or len(df) < 50:
-            raise ValueError(f"Insufficient data for {ticker}")
+        # Fetch info with failover
+        info, _ = await ProviderFactory.fetch_with_failover("fetch_ticker_info", ticker=ticker)
+
+        if df.empty:
+            raise TickerNotFoundError(f"No data found for {ticker} via {provider_name}")
+            
+        if len(df) < 20:
+            raise LiquidityHaltError(f"Insufficient historical bars for {ticker} via {provider_name}")
         
         # Calculate returns
         returns = df['Close'].pct_change().dropna()
@@ -34,10 +38,13 @@ async def fetch_stock_data(ticker: str, interval: str = "1d") -> Dict[str, Any]:
             "info": info,
             "dataframe": df,
             "returns": returns,
-            "current_price": float(df['Close'].iloc[-1])
+            "current_price": float(df['Close'].iloc[-1]),
+            "provider": provider_name
         }
+    except (TickerNotFoundError, LiquidityHaltError):
+        raise
     except Exception as e:
-        raise ValueError(f"Failed to fetch data for {ticker}: {str(e)}")
+        raise SensorError(f"Failed to fetch data for {ticker}: {str(e)}")
 
 def fetch_ohlcv(symbol: str, period="1y", interval="1d") -> pd.DataFrame:
     """Synchronous wrapper for internal technical analysis calls if needed"""

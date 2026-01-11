@@ -56,7 +56,7 @@ def get_advanced_fundamentals(ticker: str) -> AdvancedFundamentalAnalysis:
     data.trend_analysis = trend
     
     # 3. Institutional Valuation Engine (Hardened)
-    revenue_growth = data.revenue_growth if data.revenue_growth is not None else 0.1
+    revenue_growth = data.revenue_growth if data.revenue_growth is not None else 0.05 # Conservative fallback
     shares = data.shares_outstanding if data.shares_outstanding and data.shares_outstanding > 0 else None
     
     dcf = IntrinsicValuationEngine.calculate_dcf(
@@ -98,8 +98,8 @@ def get_advanced_fundamentals(ticker: str) -> AdvancedFundamentalAnalysis:
     consensus_reconciliation = None
     if data.analyst_estimates and data.analyst_estimates.target_mean_price:
         consensus = data.analyst_estimates.target_mean_price
-        model_val = dcf["value"] or 0
-        if model_val > 0 and consensus > 0:
+        model_val = dcf.get("value")
+        if model_val is not None and consensus is not None and consensus > 0:
             variance = (model_val - consensus) / consensus
             if variance > 0.40:
                 reliability.confidence_level = "Medium (Consensus Variance)"
@@ -294,6 +294,8 @@ def get_news(ticker: str) -> List[NewsItem]:
                     publish_time=pub_time
                 ))
         return parsed_news
-    except:
+    except Exception as e:
+        from .logger import pipeline_logger
+        pipeline_logger.log_error(ticker, "NEWS_FETCHER", f"Yahoo News fetch failure: {e}")
         return []
         

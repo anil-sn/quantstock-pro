@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from typing import List, Dict, Optional, Any, Tuple
 from functools import lru_cache
 from .settings import settings
@@ -6,103 +7,90 @@ from .settings import settings
 class IntrinsicValuationEngine:
     """Institutional-grade valuation engine with model fail-safes and first-principles math."""
 
-    @staticmethod
-    def calculate_dcf(
-        fcf: float, 
-        revenue_growth: float, 
-        shares: int, 
-        total_revenue: float = None,
-        fcf_margin: float = None,
-        sector: str = "Default"
-    ) -> Dict[str, Any]:
+    @classmethod
+    def calculate_dcf(cls, 
+                     fcf: Optional[float], 
+                     revenue_growth: float, 
+                     shares: Optional[int], 
+                     total_revenue: Optional[float] = None,
+                     fcf_margin: Optional[float] = None,
+                     sector: str = "Default") -> Dict[str, Any]:
         """
-        Multi-stage DCF model with strict kill-switch for sensitivity failure.
-        Audit 9.0.0: DCF is DISCARDED if TV Dominance > 50%.
+        Refactored Three-Stage DCF Engine (v20.2)
+        Stage 1: High Growth (5 years)
+        Stage 2: Fade Period (Years 6-10, transitioning to terminal growth)
+        Stage 3: Terminal Value
         """
-        if not fcf or fcf <= 0 or not shares:
-            return {"value": None, "status": "FCF_NEGATIVE", "terminal_value_dominance": 0.0}
-        
-        effective_revenue = total_revenue if total_revenue and total_revenue > 0 else (fcf / 0.1)
-        bench = settings.SECTOR_BENCHMARKS.get(sector, settings.SECTOR_BENCHMARKS["Default"])
-        
-        # Hard defensive bounds
-        growth_cap = min(0.25, bench["growth"] * 1.5)
-        safe_growth = min(growth_cap, revenue_growth)
-        
+        if fcf is None or fcf <= 0 or not shares or shares <= 0:
+            # Fallback to revenue-based FCF if possible
+            if total_revenue and fcf_margin:
+                fcf = total_revenue * fcf_margin
+            else:
+                return {"value": None, "status": "INVALID_INPUTS"}
+
         discount_rate = settings.DEFAULT_DISCOUNT_RATE
+        # Risk-Adjusted Discount Rate (Audit 20.2)
+        if fcf_margin and fcf_margin < 0.10:
+            discount_rate += 0.02 # 2% risk premium for thin margins
+
         terminal_growth = settings.DEFAULT_TERMINAL_GROWTH
         
-        # Risk Uplift
-        op_margin = fcf_margin or (fcf / effective_revenue)
-        if op_margin < 0.10: discount_rate += 0.03
-        
-        target_margin = max(0.05, min(0.25, (op_margin + bench.get("fcf_margin", 0.10)) / 2))
-        
-        def compute_pv_components(dr: float, tg: float) -> Tuple[float, float]:
-            stage_pv = 0
-            temp_rev = effective_revenue
-            temp_margin = op_margin
-            annual_fcf = fcf
-            for i in range(1, 11):
-                growth = safe_growth if i <= 5 else (safe_growth - (safe_growth-tg)*((i-5)/5))
-                temp_rev *= (1 + growth)
-                temp_margin += (target_margin - op_margin) / 10
-                annual_fcf = temp_rev * temp_margin
-                stage_pv += annual_fcf / ((1 + dr) ** i)
-            
-            terminal_val = (annual_fcf * (1 + tg)) / (dr - tg)
-            terminal_pv = terminal_val / ((1 + dr) ** 10)
-            return stage_pv + terminal_pv, terminal_pv
+        # Stage 1: High Growth (5 years)
+        pv_stage1 = 0
+        current_fcf = fcf
+        for i in range(1, 6):
+            current_fcf *= (1 + revenue_growth)
+            pv_stage1 += current_fcf / ((1 + discount_rate) ** i)
 
-        total_pv, terminal_pv = compute_pv_components(discount_rate, terminal_growth)
-        tv_dominance = (terminal_pv / total_pv) if total_pv > 0 else 0
-        
-        # Institutional Kill-Switch (Remediation 10.4)
-        if tv_dominance > 0.50:
-            return {
-                "value": None,
-                "status": "MATHEMATICALLY_ILL_POSED",
-                "reason": f"Terminal Value dominance ({tv_dominance*100:.1f}%) exceeds institutional stability threshold (50%).",
-                "terminal_value_dominance": round(tv_dominance * 100, 1)
-            }
-        
-        fair_price = total_pv / shares
-        # Sensitivity Matrix
-        sensitivity = {
-            "bull": compute_pv_components(discount_rate - 0.01, terminal_growth + 0.005)[0] / shares,
-            "bear": compute_pv_components(discount_rate + 0.01, terminal_growth - 0.005)[0] / shares
-        }
+        # Stage 2: Fade Period (Years 6-10)
+        # Linearly interpolate from revenue_growth down to terminal_growth
+        pv_stage2 = 0
+        last_growth = revenue_growth
+        for i in range(6, 11):
+            # Calculate linear fade
+            # If growth is 20% and terminal is 3%, we fade by (20-3)/5 = 3.4% per year
+            fade_step = (revenue_growth - terminal_growth) / 5
+            current_growth = max(terminal_growth, last_growth - fade_step)
+            current_fcf *= (1 + current_growth)
+            pv_stage2 += current_fcf / ((1 + discount_rate) ** i)
+            last_growth = current_growth
 
-        # Audit 9.3.0: Explicit Terminal Growth Sensitivity Table
-        tg_sensitivity = {}
-        for tg in [0.02, 0.025, 0.03, 0.035, 0.04]:
-            val, _ = compute_pv_components(discount_rate, tg)
-            tg_sensitivity[f"{tg*100:.1f}%"] = round(val / shares, 2)
+        # Stage 3: Terminal Value (normalized by fade period)
+        terminal_fcf = current_fcf * (1 + terminal_growth)
+        tv = terminal_fcf / (discount_rate - terminal_growth)
+        pv_tv = tv / ((1 + discount_rate) ** 10)
 
-        status = "OPERATIONAL"
+        total_pv = pv_stage1 + pv_stage2 + pv_tv
+        value_per_share = round(total_pv / shares, 2)
+        
+        tv_dominance = pv_tv / total_pv
+
+        # Institutional Gating (Audit 20.2: Widen threshold for 3-Stage DCF)
+        status = "VALID"
+        if tv_dominance > 0.85: # Increased from 0.5 to 0.85 for 3-stage robustness
+            status = "TERMINAL_VALUE_DOMINANT_WARNING"
+
         return {
-            "value": round(fair_price, 2) if status == "OPERATIONAL" else None,
+            "value": value_per_share,
             "status": status,
-            "raw_value": round(fair_price, 2),
-            "range": [round(sensitivity["bear"], 2), round(sensitivity["bull"], 2)],
-            "terminal_value_dominance": round(tv_dominance * 100, 1),
-            "terminal_growth_sensitivity": tg_sensitivity,
-            "assumptions": {
-                "terminal_growth": terminal_growth,
-                "discount_rate": discount_rate,
-                "target_margin": round(target_margin, 3),
-                "growth_cap_applied": safe_growth < revenue_growth
-            }
+            "terminal_value_dominance": round(tv_dominance, 2),
+            "stage1_pv": round(pv_stage1, 2),
+            "stage2_pv": round(pv_stage2, 2),
+            "terminal_pv": round(pv_tv, 2)
         }
 
     @staticmethod
-    def calculate_graham_number(eps: float, bvps: float, ticker_history: Any = None) -> Dict[str, Any]:
+    def calculate_graham_number(eps: Optional[float], bvps: Optional[float], ticker_history: Any = None) -> Dict[str, Any]:
         """
         Strict Graham validity. Undefined for non-positive inputs.
         """
         if eps is None or bvps is None or eps <= 0 or bvps <= 0:
             return {"value": None, "status": "UNDEFINED", "reason": "Formula sqrt(22.5 * EPS * BVPS) requires positive real inputs."}
-        return {"value": round((22.5 * eps * bvps) ** 0.5, 2), "status": "VALID"}
+        try:
+            val = round((22.5 * float(eps) * float(bvps)) ** 0.5, 2)
+            return {"value": val, "status": "VALID"}
+        except:
+            return {"value": None, "status": "UNDEFINED", "reason": "Calculation error"}
 
 class FCFQualityAnalyzer:
     """Classifies the divergence between Cash Flow and Net Income (Audit 10.3)."""
@@ -161,23 +149,27 @@ class StatisticalAnalysis:
             val = getattr(data, field, None)
             bench_val = sector_bench.get(bench_key)
             
-            if val is not None and bench_val:
+            if val is not None and bench_val is not None:
                 sigma = bench_val * sector_variability.get(bench_key, 0.30)
                 if sigma == 0: sigma = 0.01
                 
                 # Calculate Sector Distance (Audit 9.1.0 Fix)
                 # We move away from pure Z-score labels to 'Sector Distance'
                 # This explicitly shows how many 'Standard Deviations' from the mean
-                distance = (val - bench_val) / sigma
+                distance = (val - bench_val) / sigma if sigma > 0 else 0
                 
-                if bench_key == "pe":
-                    # Invert for PE: distance > 0 means extended, < 0 means discount
-                    status = "Extended Multiple" if distance > 0.5 else ("Value Discount" if distance < -0.5 else "In-Line")
-                    # Percentile mapping (High distance = Low percentile for value)
-                    percentile = round(50 - (distance * 34), 1)
-                else:
-                    status = "Outperforming" if distance > 0.5 else ("Lagging Sector" if distance < -0.5 else "In-Line")
-                    percentile = round(50 + (distance * 34), 1)
+                status = "In-Line"
+                percentile = 50.0
+                
+                if distance is not None:
+                    if bench_key == "pe":
+                        # Invert for PE: distance > 0 means extended, < 0 means discount
+                        status = "Extended Multiple" if distance > 0.5 else ("Value Discount" if distance < -0.5 else "In-Line")
+                        # Percentile mapping (High distance = Low percentile for value)
+                        percentile = round(50 - (distance * 34), 1)
+                    else:
+                        status = "Outperforming" if distance > 0.5 else ("Lagging Sector" if distance < -0.5 else "In-Line")
+                        percentile = round(50 + (distance * 34), 1)
                 
                 percentile = min(99.0, max(1.0, percentile))
                 
@@ -200,14 +192,14 @@ class DataIntegrityValidator:
         status = "VALID"
         
         # 1. Net Income vs ROE Consistency (Audit 9.2.0 Fix)
-        ni = data.net_income or 0
-        roe = data.return_on_equity or 0
-        if ni > 0 and roe < 0:
+        ni = data.net_income
+        roe = data.return_on_equity
+        if ni is not None and roe is not None and ni > 0 and roe < 0:
             issues.append("Sign Paradox: Positive Net Income with Negative ROE.")
             status = "DATA_HOLD" 
             
         # 2. Margin Sanity
-        if data.gross_margins and data.operating_margins:
+        if data.gross_margins is not None and data.operating_margins is not None:
             if data.operating_margins > data.gross_margins:
                 issues.append("Operating margin exceeding gross margin (Impossible).")
                 status = "DATA_HOLD"
@@ -248,9 +240,9 @@ class DataReliabilityEngine:
 
         # Audit 3.1 Fix: Fundamental Confidence Downgrade
         warning_count = 0
-        if (data.return_on_equity or 0) < 0.05: warning_count += 1
-        if (data.free_cash_flow_margin or 0) < 0.05: warning_count += 1
-        if (data.operating_margins or 0) < 0.10: warning_count += 1
+        if data.return_on_equity is not None and data.return_on_equity < 0.05: warning_count += 1
+        if data.free_cash_flow_margin is not None and data.free_cash_flow_margin < 0.05: warning_count += 1
+        if data.operating_margins is not None and data.operating_margins < 0.10: warning_count += 1
         
         if warning_count >= 2 and confidence_level == "High":
             confidence_level = "Medium (Fundamental Instability)"
@@ -290,7 +282,7 @@ class FundamentalTrendEngine:
                 
                 if row is not None and len(row) >= 2:
                     curr, prev = row.iloc[0], row.iloc[1]
-                    if prev is not None and not np.isnan(curr) and not np.isnan(prev):
+                    if curr is not None and prev is not None and not pd.isna(curr) and not pd.isna(prev):
                         # Base Effect Normalization
                         if abs(prev) < 1e6: # Less than $1M
                             d_pct = 1.0 if curr > prev else -1.0

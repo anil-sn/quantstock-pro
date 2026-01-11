@@ -415,8 +415,9 @@ class SignalImpact(BaseModel):
         return "Neutral"
 
 class MarketSentiment(BaseModel):
-    score: ScoreDetail
-    fear_greed_index: ScoreDetail
+    score: float
+    fear_greed_index: float
+    summary: Optional[str] = None
 
 class TradeSetup(BaseModel):
     action: TradeAction
@@ -452,7 +453,7 @@ class RiskMetrics(BaseModel):
 
 class HorizonPerspective(BaseModel):
     action: TradeAction
-    confidence: ScoreDetail
+    confidence: float
     entry_price: float
     target_price: float
     stop_loss: float
@@ -540,7 +541,7 @@ class InsiderTrade(BaseModel):
     position: str
     transaction_type: str
     shares: int
-    value: float
+    value: Optional[float] = None
 
 class OptionSentiment(BaseModel):
     put_call_ratio: float
@@ -574,6 +575,7 @@ class UpcomingEvents(BaseModel):
     revenue_avg_estimate: Optional[int] = None
 
 class MarketContext(BaseModel):
+    ticker: Optional[str] = None
     analyst_ratings: List[AnalystRating] = []
     insider_activity: List[InsiderTrade] = []
     option_sentiment: Optional[OptionSentiment] = None
@@ -685,5 +687,6 @@ class AdvancedStockResponse(BaseModel):
     human_insight: HumanInsightBlock
     system: SystemBlock
     market_context: Optional[MarketContext] = None 
+    ai_analysis: Optional[AIAnalysisResult] = None
 
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})

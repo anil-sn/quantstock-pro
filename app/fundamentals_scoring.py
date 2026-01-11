@@ -26,7 +26,7 @@ def calculate_quality_grade(data: FundamentalData, inferences: Any = None, secto
     p_metrics.append(min(100, max(0, (om / 0.20) * 100))) # OM target 20%
     
     # ROE Neutralization for Growth Phase
-    if roe < 0 and (data.revenue_growth or 0) > 0.20 and gm > 0.50:
+    if roe < 0 and data.revenue_growth is not None and data.revenue_growth > 0.20 and gm > 0.50:
         p_metrics.append(50.0) # Investment Phase Neutral
     else:
         p_metrics.append(min(100, max(0, (roe / 0.15) * 100)))
@@ -55,7 +55,7 @@ def calculate_quality_grade(data: FundamentalData, inferences: Any = None, secto
     c_metrics = []
     roic = data.return_on_invested_capital or 0
     c_metrics.append(min(100, max(0, (roic / 0.15) * 100)))
-    if (data.operating_margins or 0) > 0.10: c_metrics.append(100)
+    if data.operating_margins is not None and data.operating_margins > 0.10: c_metrics.append(100)
     else: c_metrics.append(50)
     
     raw_scores["consistency"] = sum(c_metrics) / len(c_metrics)
@@ -69,28 +69,29 @@ def calculate_quality_grade(data: FundamentalData, inferences: Any = None, secto
     )
     
     # GOVERNANCE PENALTY (Audit 10.7)
-    audit_risk = getattr(data, 'audit_risk_score', 2)
-    board_risk = getattr(data, 'board_risk_score', 2)
+    audit_risk = getattr(data, 'audit_risk_score', 2) or 2
+    board_risk = getattr(data, 'board_risk_score', 2) or 2
     
     gov_penalty = (max(audit_risk, board_risk) / 10) * 10 
     
     # Audit 9.2.0: Pathological Compensation Penalty
     # If compensation risk is max (10) while ROE is negative, apply extra haircut
-    if board_risk >= 10 and (data.return_on_equity or 0) < 0:
+    if board_risk >= 10 and data.return_on_equity is not None and data.return_on_equity < 0:
         gov_penalty += 10.0 # Additional "Leadership Failure" penalty
     
     overall_score = round(max(0, min(100, weighted_score - gov_penalty)), 1)
     
     # Audit 9.1.0: Profitability Reconciliation Bridge (Remediation 10.2)
     reconciliation_bridge = None
-    if om > 0 and roe < 0:
+    if om is not None and roe is not None and om > 0 and roe < 0:
         reconciliation_bridge = "Operating profit neutralized by non-operating expenses (likely SBC, Interest, or Tax drag)."
-    elif om < 0 and fcf_m > 0:
+    elif om is not None and fcf_m is not None and om < 0 and fcf_m > 0:
         reconciliation_bridge = "Operating loss masked by high non-cash charges (Depreciation/Amortization) or working capital inflows."
 
     # Audit 3.2 Fix: Margin Fragility Hard Cap
-    if (data.operating_margins or 0) < (bench["margin"] * 0.5) and (data.free_cash_flow or 0) < 0:
-        overall_score = min(overall_score, 65.0)
+    if data.operating_margins is not None and data.free_cash_flow is not None:
+        if data.operating_margins < (bench["margin"] * 0.5) and data.free_cash_flow < 0:
+            overall_score = min(overall_score, 65.0)
     
     if overall_score >= 80: grade, label = QualityGrade.A, "Strong Buy"
     elif overall_score >= 65: grade, label = QualityGrade.B, "Buy"
@@ -142,13 +143,13 @@ def analyze_business_model(data: FundamentalData) -> BusinessModelAnalysis:
 
 def derive_executive_lists(data: FundamentalData, quality: CompositeQualityScore) -> Tuple[List[MetricItem], List[MetricItem]]:
     strengths, concerns = [], []
-    if (data.revenue_growth or 0) > 0.25: strengths.append(MetricItem(category="Growth", metric="Revenue Growth", value=f"+{data.revenue_growth*100:.1f}%", assessment="Exceptional"))
+    if data.revenue_growth is not None and data.revenue_growth > 0.25: strengths.append(MetricItem(category="Growth", metric="Revenue Growth", value=f"+{data.revenue_growth*100:.1f}%", assessment="Exceptional"))
     if data.net_cash_status == "Net Cash": strengths.append(MetricItem(category="Financial Health", metric="Net Cash Position", value=f"${data.net_cash/1e6:.1f}M", assessment="Very Strong"))
-    if (data.return_on_invested_capital or 0) > 0.15: strengths.append(MetricItem(category="Efficiency", metric="ROIC", value=f"{data.return_on_invested_capital*100:.1f}%", assessment="High Capital Efficiency"))
+    if data.return_on_invested_capital is not None and data.return_on_invested_capital > 0.15: strengths.append(MetricItem(category="Efficiency", metric="ROIC", value=f"{data.return_on_invested_capital*100:.1f}%", assessment="High Capital Efficiency"))
     
-    if (data.operating_margins or 0) < 0.10: concerns.append(MetricItem(category="Profitability", metric="Operating Margin", value=f"{data.operating_margins*100:.2f}%", assessment="Below Sector"))
-    if (data.forward_pe or 0) > 25: concerns.append(MetricItem(category="Valuation", metric="Forward P/E", value=f"{data.forward_pe:.1f}x", assessment="Premium Multiple"))
-    if (data.return_on_invested_capital or 0) < 0.05 and (data.return_on_invested_capital is not None): concerns.append(MetricItem(category="Efficiency", metric="ROIC", value=f"{data.return_on_invested_capital*100:.1f}%", assessment="Poor Capital Returns"))
+    if data.operating_margins is not None and data.operating_margins < 0.10: concerns.append(MetricItem(category="Profitability", metric="Operating Margin", value=f"{data.operating_margins*100:.2f}%", assessment="Below Sector"))
+    if data.forward_pe is not None and data.forward_pe > 25: concerns.append(MetricItem(category="Valuation", metric="Forward P/E", value=f"{data.forward_pe:.1f}x", assessment="Premium Multiple"))
+    if data.return_on_invested_capital is not None and data.return_on_invested_capital < 0.05: concerns.append(MetricItem(category="Efficiency", metric="ROIC", value=f"{data.return_on_invested_capital*100:.1f}%", assessment="Poor Capital Returns"))
     
     # Audit 7.5.0: Model Integrity Warning
     if data.inferences and "Medium" in data.inferences.overall_sentiment.confidence:
@@ -242,7 +243,7 @@ def generate_investment_recommendation(
         action=action, 
         confidence=confidence, 
         position_sizing=sizing, 
-        investment_horizon="3-5 years (Growth story)" if (data.revenue_growth or 0) > 0.2 else "2-3 years", 
+        investment_horizon="3-5 years (Growth story)" if data.revenue_growth is not None and data.revenue_growth > 0.2 else "2-3 years", 
         key_risks=risk.factors if risk else ["Data Insufficiency"], 
         monitoring_metrics=[
             "Revenue Growth Sustainability", 

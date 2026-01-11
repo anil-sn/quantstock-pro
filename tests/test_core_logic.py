@@ -4,7 +4,7 @@ from app.technicals_scoring import calculate_algo_signal
 from app.models import Technicals, TrendDirection, AlgoSignal, RiskLevel
 from app.risk import RiskEngine, RiskParameters
 from app.fundamentals_analytics import IntrinsicValuationEngine
-from app.service import STierTradingSystem, _process_horizon
+from app.service import QuantitativeTradingSystem, _process_horizon
 from app.models import MarketContext, UpcomingEvents, DecisionState, SetupState, InsiderTrade
 from app.governor import SignalGovernor, UnifiedRejectionTracker, DataIntegrity
 
@@ -67,7 +67,7 @@ def test_risk_position_sizing():
         setup_state=SetupState.VALID,
         price=100.0,
         risk_per_share=2.0, # 2% risk distance
-        avg_volume=1000000
+        avg_volume_20d=1000000
     )
     # Default Max Capital Risk is usually around 1-2%, let's say 1.0%
     # Position = (1% of Capital) / (2% Risk distance) = 50% of Capital?

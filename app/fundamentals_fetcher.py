@@ -39,21 +39,36 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
     """Fetch and sanitize raw fundamental data from yfinance with fallbacks."""
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info
-        
-        # Fallback for empty info: yfinance sometimes fails on first attempt
-        if not info or len(info) < 5:
-            stock = yf.Ticker(ticker)
+        info = {}
+        try:
             info = stock.info
-            
+        except Exception as e:
+            print(f"Standard info fetch failed for {ticker}: {e}. Trying fallbacks...")
+
+        # Fallback for empty info: yfinance sometimes fails on first attempt or 404s for intl
         if not info or len(info) < 5:
             try:
+                # Try to reconstruct from statements
+                income = stock.income_stmt
+                balance = stock.balance_sheet
+                if not income.empty:
+                    latest_income = income.iloc[:, 0]
+                    info["totalRevenue"] = latest_income.get("Total Revenue")
+                    info["netIncome"] = latest_income.get("Net Income")
+                    info["ebitda"] = latest_income.get("EBITDA")
+                if not balance.empty:
+                    latest_balance = balance.iloc[:, 0]
+                    info["totalCash"] = latest_balance.get("Cash And Cash Equivalents")
+                    info["totalDebt"] = latest_balance.get("Total Debt")
+                    info["totalStockholderEquity"] = latest_balance.get("Stockholders Equity")
+                
                 fast = stock.fast_info
                 info["quoteType"] = fast.get("quoteType", "EQUITY")
                 info["marketCap"] = fast.get("market_cap")
                 info["exchange"] = fast.get("exchange")
-            except:
-                pass
+                info["longName"] = ticker.upper()
+            except Exception as ex:
+                print(f"Deep fallback failed for {ticker}: {ex}")
 
         q_raw = str(info.get("quoteType", "EQUITY")).upper()
         TYPE_MAP = {
@@ -83,18 +98,22 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
         data.trailing_pe = info.get("trailingPE")
         data.forward_pe = info.get("forwardPE")
         
+        # Current Price from info for calculations
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+
         # Indian Stock Fallback: sharesOutstanding is often missing in root info
         shares = info.get("sharesOutstanding")
-        if not shares and data.market_cap and current_price:
-            shares = int(data.market_cap / current_price)
+        if not shares and data.market_cap and price:
+            shares = int(data.market_cap / price)
         data.shares_outstanding = shares
 
         # Audit 7.3.0 Fix: PE Ratio Fallback
         forward_eps = info.get("forwardEps")
-        if not data.forward_pe and current_price and forward_eps:
+        if not data.forward_pe and price and forward_eps:
             try:
-                data.forward_pe = current_price / forward_eps
-            except: pass
+                data.forward_pe = price / forward_eps
+            except Exception as e:
+                print(f"PE Fallback Error for {ticker}: {e}")
             
         data.price_to_sales = info.get("priceToSalesTrailing12Months")
         data.price_to_book = info.get("priceToBook")
@@ -109,8 +128,8 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
             
         if data.forward_pe and data.forward_pe > 0:
             data.earnings_yield = 1 / data.forward_pe
-        elif current_price and forward_eps and forward_eps > 0:
-            data.earnings_yield = forward_eps / current_price
+        elif price and forward_eps and forward_eps > 0:
+            data.earnings_yield = forward_eps / price
         
         data.book_value = info.get("bookValue")
         data.dividend_rate = info.get("dividendRate")
@@ -198,7 +217,8 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
         if data.ebitda and info.get("interestExpense"):
             try:
                 data.interest_coverage = float(data.ebitda) / abs(float(info["interestExpense"]))
-            except: pass
+            except Exception as e:
+                print(f"Interest coverage calculation error: {e}")
 
         # Ownership & Analysts
         data.dividend_yield = info.get("dividendYield")

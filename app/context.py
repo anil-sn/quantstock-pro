@@ -16,8 +16,9 @@ def sanitize(val):
 
 @cached(cache=TTLCache(maxsize=128, ttl=300))
 def get_market_context(ticker: str) -> MarketContext:
+    # Per-request ticker instance for thread safety
     stock = yf.Ticker(ticker)
-    context = MarketContext()
+    context = MarketContext(ticker=ticker.upper())
     
     # 1. Analyst Ratings (Upgrades/Downgrades History)
     try:
@@ -42,9 +43,13 @@ def get_market_context(ticker: str) -> MarketContext:
                         action=str(row['Action']),
                         date=date_str
                     ))
-                except Exception:
+                except Exception as e:
+                    from .logger import pipeline_logger
+                    pipeline_logger.log_error(ticker, "CONTEXT", f"Individual Rating Row failure: {e}")
                     continue
-    except Exception:
+    except Exception as e:
+        from .logger import pipeline_logger
+        pipeline_logger.log_error(ticker, "CONTEXT", f"Analyst Ratings block failure: {e}")
         pass 
 
     # 2. Analyst Price Targets
@@ -58,7 +63,9 @@ def get_market_context(ticker: str) -> MarketContext:
                 mean=sanitize(targets.get('mean')),
                 median=sanitize(targets.get('median'))
             )
-    except Exception:
+    except Exception as e:
+        from .logger import pipeline_logger
+        pipeline_logger.log_error(ticker, "CONTEXT", f"Price Targets failure: {e}")
         pass
 
     # 3. Consensus (Votes)
@@ -75,7 +82,9 @@ def get_market_context(ticker: str) -> MarketContext:
                 sell=int(curr.get('sell', 0)),
                 strong_sell=int(curr.get('strongSell', 0))
             )
-    except Exception:
+    except Exception as e:
+        from .logger import pipeline_logger
+        pipeline_logger.log_error(ticker, "CONTEXT", f"Consensus failure: {e}")
         pass
 
     # 4. Earnings / Events
@@ -97,7 +106,9 @@ def get_market_context(ticker: str) -> MarketContext:
                 earnings_high_estimate=sanitize(get_cal_val("Earnings High")),
                 revenue_avg_estimate=sanitize(get_cal_val("Revenue Average"))
             )
-    except Exception:
+    except Exception as e:
+        from .logger import pipeline_logger
+        pipeline_logger.log_error(ticker, "CONTEXT", f"Earnings/Events failure: {e}")
         pass
 
     # 5. Insider Activity
@@ -128,7 +139,9 @@ def get_market_context(ticker: str) -> MarketContext:
                 ))
             
             context.insider_activity = material_trades[:5] # Keep top 5 material
-    except Exception:
+    except Exception as e:
+        from .logger import pipeline_logger
+        pipeline_logger.log_error(ticker, "CONTEXT", f"Insider Activity failure: {e}")
         pass
 
     # 6. Option Sentiment
@@ -151,11 +164,11 @@ def get_market_context(ticker: str) -> MarketContext:
                 
                 avg_iv = calls['impliedVolatility'].mean() if 'impliedVolatility' in calls else 0.0
                 
-                # --- Fix #5: Kill-switch for absurd IV ---
-                if avg_iv > 1.0:
-                    context.option_sentiment = None
-                    return context # Early return or just skip assignment
-                # ----------------------------------------
+                # --- Fix #5: High Compression Flag instead of Kill-Switch ---
+                iv_val = sanitize(round(avg_iv * 100, 2))
+                if iv_val and iv_val > 100:
+                    sentiment = f"High Compression ({sentiment})"
+                # ------------------------------------------------------------
 
                 # Identify Option Walls (Support/Resistance)
                 max_call_oi = 0
@@ -172,13 +185,15 @@ def get_market_context(ticker: str) -> MarketContext:
 
                 context.option_sentiment = OptionSentiment(
                     put_call_ratio=sanitize(round(pc_ratio, 2)),
-                    implied_volatility=sanitize(round(avg_iv * 100, 2)),
+                    implied_volatility=iv_val,
                     total_open_interest=int(total_oi),
                     sentiment=sentiment,
                     highest_call_oi_strike=sanitize(max_call_strike),
                     highest_put_oi_strike=sanitize(max_put_strike)
                 )
-    except Exception:
+    except Exception as e:
+        from .logger import pipeline_logger
+        pipeline_logger.log_error(ticker, "CONTEXT", f"Options failure: {e}")
         pass
 
     return context

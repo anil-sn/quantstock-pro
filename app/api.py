@@ -16,9 +16,9 @@ async def research(ticker: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/analyze/{ticker}", response_model=AdvancedStockResponse)
-async def analyze(ticker: str, mode: AnalysisMode = Query(AnalysisMode.ALL)):
+async def analyze(ticker: str, mode: AnalysisMode = Query(AnalysisMode.ALL), force_ai: bool = Query(False)):
     try:
-        return await analyze_stock(ticker, mode)
+        return await analyze_stock(ticker, mode, force_ai)
     except Exception as e:
         import traceback
         traceback.print_exc()

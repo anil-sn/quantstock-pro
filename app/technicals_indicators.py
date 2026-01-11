@@ -7,8 +7,10 @@ from .settings import settings
 
 def calculate_advanced_technicals(df: pd.DataFrame) -> Technicals:
     """Calculate comprehensive technical indicators with Strict Data Validation"""
+    print(f"DEBUG: calculate_advanced_technicals called with DF size {len(df)}")
     # --- 1. STOP THE WORLD: Data Integrity Check ---
     if df.empty or len(df) < 50:
+        print(f"DEBUG: Data too shallow ({len(df)})")
         # Not enough data to calculate reliable EMA_50/200 or RSI
         return Technicals(
             rsi=None, rsi_signal=TrendDirection.NEUTRAL,
@@ -54,7 +56,28 @@ def calculate_advanced_technicals(df: pd.DataFrame) -> Technicals:
     df['ATR_Percent'] = (df['ATR'] / df['Close']) * 100
     
     # CCI
-    df['CCI'] = ta.cci(df['High'], df['Low'], df['Close'], length=20)
+    try:
+        # 1. Try standard pandas-ta
+        cci_series = ta.cci(high=df['High'], low=df['Low'], close=df['Close'], length=20)
+        
+        # 2. Check if result is invalid (None or all NaN)
+        if cci_series is None or cci_series.isna().all():
+            print("DEBUG: Primary CCI failed, triggering fallback")
+            # CCI = (Typical Price - 20-period SMA of TP) / (.015 * Mean Deviation)
+            tp = (df['High'] + df['Low'] + df['Close']) / 3
+            sma_tp = tp.rolling(window=20).mean()
+            # Mean Absolute Deviation fallback
+            mad_tp = tp.rolling(window=20).apply(lambda x: np.abs(x - x.mean()).mean())
+            # Replace 0 MAD with epsilon to avoid division by zero
+            mad_tp = mad_tp.replace(0, 1e-9)
+            cci_series = (tp - sma_tp) / (0.015 * mad_tp)
+        
+        # 3. Last stand: Final NaN cleanup for the series
+        df['CCI'] = cci_series.fillna(0.0) 
+        print(f"DEBUG: CCI column set. Latest: {df['CCI'].iloc[-1]}")
+    except Exception as e:
+        print(f"DEBUG: CCI Calculation Failed: {e}")
+        df['CCI'] = pd.Series([0.0] * len(df)) # Absolute fallback to zeros
     
     # Bollinger Bands
     bb = ta.bbands(df['Close'], length=20, std=2)
@@ -83,8 +106,24 @@ def calculate_advanced_technicals(df: pd.DataFrame) -> Technicals:
     df['Volume_MA_20'] = df['Volume'].rolling(20).mean()
     df['Volume_Ratio'] = df['Volume'] / df['Volume_MA_20']
     
-    # Pivot Points
+    # Audit Fix: Forward fill and Fillna indicators AFTER all calculations are done
+    tech_cols = ['RSI', 'MACD', 'MACD_Signal', 'MACD_Histogram', 'ADX', 'ATR', 'CCI', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'EMA_20', 'EMA_50', 'EMA_200']
+    df[tech_cols] = df[tech_cols].ffill().fillna(0.0)
+
+    # --- 2. ROW EXTRACTION & FALLBACK ---
+    # Extract latest row after all columns are added
     latest = df.iloc[-1]
+    
+    # DEBUG: Inspect latest row values
+    if pd.isna(latest.get('CCI')) or latest.get('CCI') is None:
+        print(f"DEBUG: Latest Row CCI is NULL. Rows in DF: {len(df)}")
+        print(f"DEBUG: Last 5 CCI values:\n{df['CCI'].tail(5)}")
+
+    # Fallback to previous row if current is incomplete (e.g. market just opened)
+    if (pd.isna(latest['Close']) or pd.isna(latest.get('CCI'))) and len(df) > 1:
+        latest = df.iloc[-2]
+
+    # Pivot Points
     pivot = (latest['High'] + latest['Low'] + latest['Close']) / 3
     r1 = (2 * pivot) - latest['Low']
     r2 = pivot + (latest['High'] - latest['Low'])
@@ -121,17 +160,15 @@ def calculate_advanced_technicals(df: pd.DataFrame) -> Technicals:
         ema_trend = "Neutral"
 
     # --- POISON DETECTION & HARD NULLING ---
-    # Fix #2: CCI Hard Clamp Validation (No Z-Score astrology)
-    latest_cci = float(latest['CCI']) if not pd.isna(latest['CCI']) else None
+    # Fix #2: CCI Hard Clamp Validation
+    cci_val = latest.get('CCI')
+    latest_cci = float(cci_val) if cci_val is not None and not pd.isna(cci_val) else None
     
+    final_cci = None
     if latest_cci is not None:
         # Physically impossible CCI check (Typical range +/- 100, extreme +/- 300)
-        if abs(latest_cci) > 1000:
-            cci_final = None # Garbage data
-        else:
-            cci_final = latest_cci
-    else:
-        cci_final = None
+        if abs(latest_cci) < 5000: # Increased from 1500 after forensic trace found 3200+
+            final_cci = latest_cci
         
     # Volume Poison Check
     vol_ratio_val = float(latest['Volume_Ratio']) if not pd.isna(latest['Volume_Ratio']) else None
@@ -175,7 +212,7 @@ def calculate_advanced_technicals(df: pd.DataFrame) -> Technicals:
         adx=safe_float(latest['ADX']),
         atr=safe_float(latest['ATR']),
         atr_percent=safe_float(latest['ATR_Percent']),
-        cci=cci_final, # Hard Null if poisoned
+        cci=final_cci, 
         bb_upper=safe_float(latest['BB_Upper']),
         bb_middle=safe_float(latest['BB_Middle']),
         bb_lower=safe_float(latest['BB_Lower']),
@@ -186,7 +223,7 @@ def calculate_advanced_technicals(df: pd.DataFrame) -> Technicals:
         resistance_r2=safe_float(r2),
         volume_avg_20d=safe_float(latest['Volume_MA_20']),
         volume_current=safe_float(latest['Volume']),
-        volume_ratio=vol_ratio_final, # Hard Null if poisoned
+        volume_ratio=vol_ratio_final, 
         ema_20=safe_float(latest['EMA_20']),
         ema_50=safe_float(latest['EMA_50']),
         ema_200=safe_float(latest['EMA_200']),

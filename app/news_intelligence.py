@@ -3,7 +3,7 @@ from .models import NewsItem, NewsIntelligence, NewsSignal, PipelineStageState
 import re
 
 class NewsIntelligenceEngine:
-    """Institutional-grade News Signal & Noise Filtration Engine"""
+    """News Signal & Noise Filtration Engine"""
 
     # Keywords that indicate "Narrative Exhaust" (Retail Noise)
     NOISE_KEYWORDS = [

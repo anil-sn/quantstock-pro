@@ -15,12 +15,20 @@ class Settings(BaseSettings):
     
     # Security
     GEMINI_API_KEY: str
+    TAVILY_API_KEY: Optional[str] = None
     GOOGLE_SEARCH_API_KEY: Optional[str] = None
     GOOGLE_CSE_ID: Optional[str] = None
     NEWS_API_KEY: Optional[str] = None
     API_KEY: Optional[str] = None
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
     SENTRY_DSN: Optional[str] = None
+    
+    # Redis Configuration
+    REDIS_URL: Optional[str] = None
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_PASSWORD: Optional[str] = None
     
     # Model Configuration
     GEMINI_MODEL: str = "gemini-2.5-pro"

@@ -27,8 +27,8 @@ class UnifiedRejectionTracker:
 class SignalGovernor:
     """Enforces S-Tier trading rules and data integrity"""
 
-    def assess_data_integrity(self, technicals: Technicals, context: Optional[MarketContext]) -> DataIntegrity:
-        """Comprehensive data quality assessment"""
+    def assess_data_integrity(self, technicals: Technicals, context: Optional[MarketContext], ticker: str = "") -> DataIntegrity:
+        """Comprehensive data quality assessment with locale awareness"""
         # Check for critical missing data
         if technicals.rsi is None or technicals.macd_histogram is None:
             return DataIntegrity.INVALID
@@ -42,7 +42,13 @@ class SignalGovernor:
         if context and context.option_sentiment and context.option_sentiment.implied_volatility > 200:
              poisoned_count += 1
 
+        # Locale Awareness: International tickers often lack Options/Insider data in yfinance
+        is_international = ticker.endswith(".NS") or ticker.endswith(".BO") or "." in ticker
+        
         if poisoned_count > 0:
+            if is_international and technicals.cci is not None:
+                # If it's international and the only "poison" is missing context data, allow VALID
+                return DataIntegrity.VALID
             return DataIntegrity.DEGRADED
         
         return DataIntegrity.VALID

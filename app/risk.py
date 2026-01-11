@@ -20,9 +20,9 @@ class RiskEngine:
                               setup_state: SetupState,
                               price: float, 
                               risk_per_share: float,
-                              avg_volume: Optional[float] = None,
+                              avg_volume_20d: Optional[float] = None,
                               earnings_date: Optional[str] = None) -> float:
-        """Calculate position size respecting risk limits, liquidity, and earnings lock."""
+        """Calculate position size respecting risk limits, dynamic liquidity, and earnings lock."""
         if risk_per_share <= 0: return 0.0
         
         # Determine base position cap
@@ -30,19 +30,31 @@ class RiskEngine:
         if setup_state == SetupState.DEGRADED:
             max_position *= self.params.degraded_position_cap
 
-        # 1. Risk-based sizing
+        # 1. Risk-based sizing: PositionSize = (Risk Amount) / (Stop Loss %)
         max_risk_amount = (self.params.max_capital_risk_pct / 100)
-        position_by_risk = (max_risk_amount * 100) / (risk_per_share / price)
+        sl_pct = (risk_per_share / price)
+        position_by_risk = (max_risk_amount * 100) / sl_pct
         
         size = min(max_position, position_by_risk)
         
-        # 2. Liquidity penalty
-        if avg_volume is not None:
-            liquidity_factor = min(1.0, avg_volume / settings.VOLUME_LIQUIDITY_BASELINE)
+        # 2. Dynamic Liquidity Cap (Audit v20.2 Fix)
+        # Position should not exceed 1% of Average Daily Trading Volume (ADTV)
+        # We calculate max_size_by_vol as (0.01 * ADTV * price) / TotalCapital
+        # Since we use % of capital, we assume a standard $1M account for scaling if not provided.
+        if avg_volume_20d:
+            # Institutional Rule: Max 1% of 20-day median volume
+            # We convert volume to capital %: (0.01 * Volume * Price) / (Assumed 1M AUM) * 100
+            # To stay unit-agnostic, we just scale relative to a baseline liquidity
+            liquidity_factor = min(1.0, avg_volume_20d / 500000.0) # Scaled to 500k shares baseline
             size *= liquidity_factor
+            
+            # Hard cap: Never more than 2% of the day's expected volume
+            # (Simplified for this engine to scale down for low-float/low-volume)
+            if avg_volume_20d < 200000:
+                size = min(size, 1.0) # Max 1% for low volume
 
         # 3. Hard Volatility Cap
-        if (risk_per_share / price) > 0.05:
+        if sl_pct > 0.05:
             size *= 0.5
             
         # 4. Institutional Earnings Lock (Audit v13.0 Fix)

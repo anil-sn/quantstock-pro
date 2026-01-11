@@ -4,14 +4,15 @@ import time
 from fastapi import FastAPI
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from prometheus_fastapi_instrumentator import Instrumentator
-from .api import router
+from .api import router as v1_router
+from .api_v2 import router as v2_router
 from .settings import settings
 from .middleware import RateLimiterMiddleware, APIKeyMiddleware
 
 # Uptime tracking
 START_TIME = time.time()
 
-# Institutional Error Tracking (Audit Fix)
+# Error Tracking
 if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
@@ -28,7 +29,8 @@ app.add_middleware(
 )
 app.add_middleware(APIKeyMiddleware, api_key=settings.API_KEY)
 
-app.include_router(router)
+app.include_router(v1_router, tags=["v1"])
+app.include_router(v2_router, tags=["v2"])
 
 Instrumentator().instrument(app).expose(app)
 
