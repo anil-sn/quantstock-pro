@@ -135,9 +135,10 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
         data.dividend_rate = info.get("dividendRate")
         
         # Anchor profitability to netIncomeToCommon with NetIncome fallback
-        net_income_anchor = info.get("netIncomeToCommon") or info.get("netIncome")
+        net_income_anchor = info.get("net_incomeToCommon") or info.get("net_income")
         data.net_income = net_income_anchor
         data.total_revenue = total_rev
+        data.total_assets = info.get("totalAssets")
         
         data.profit_margin = info.get("profitMargins")
         data.gross_margins = info.get("grossMargins")

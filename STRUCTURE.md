@@ -16,7 +16,7 @@ The system operates on a multi-layered sensor and scoring architecture designed 
 ## File Map & Relationships
 
 ### Entry Points & API
-- `app/main.py`: Core FastAPI initialization; mounts v1 and v2 routers.
+- `app/main.py`: Core FastAPI initialization; mounts v2 router.
 - `app/api_v2.py`: The modern, resource-oriented API specification (Version 2.0.0).
 - `app/models_v2.py`: Versioned schemas for the 2.0 interface.
 

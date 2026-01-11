@@ -13,7 +13,7 @@ The system follows a multi-layered analytical pipeline:
 ## 📂 app/ (Source Root)
 
 ### `main.py`
-- Entry point for FastAPI. Orchestrates the inclusion of both **v1** and **v2** API routers.
+- Entry point for FastAPI. Orchestrates the inclusion of the **v2** API router.
 - Configures global middleware (Rate Limiting, Security, Telemetry).
 
 ### `api_v2.py` (Versioned Endpoints)

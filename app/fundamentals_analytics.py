@@ -108,6 +108,30 @@ class FCFQualityAnalyzer:
             return {"classification": "Structural Decay / Working Capital Burn", "risk": "High", "detail": "NI does not convert to cash; investigate revenue quality or rising inventory/receivables."}
         return {"classification": "Balanced", "risk": "Low"}
 
+class AccrualQualityAnalyzer:
+    """
+    Institutional Accrual Audit (Sloan Ratio).
+    Sloan Ratio = (Net Income - Cash Flow from Ops) / Total Assets.
+    Values > 0.10 indicate 'Earnings Manipulation' or poor quality accruals.
+    """
+    
+    @staticmethod
+    def calculate_sloan_ratio(net_income: Optional[float], ocf: Optional[float], total_assets: Optional[float]) -> Dict[str, Any]:
+        if net_income is None or ocf is None or not total_assets or total_assets <= 0:
+            return {"ratio": 0.0, "status": "INSUFFICIENT_DATA"}
+        
+        ratio = (net_income - ocf) / total_assets
+        
+        status = "HEALTHY"
+        if ratio > 0.10: status = "MANIPULATION_RISK_HIGH"
+        elif ratio < -0.10: status = "CASH_RICH_CONSERVATIVE"
+        
+        return {
+            "ratio": round(ratio, 4),
+            "status": status,
+            "interpretation": "Earnings are significantly ahead of cash generation" if ratio > 0.10 else "Accounting is likely conservative"
+        }
+
 class CapitalAllocationEngine:
     """Calculates position sizing using Kelly Criterion and risk-parity concepts."""
 

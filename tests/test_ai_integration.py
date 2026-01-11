@@ -108,7 +108,34 @@ async def test_prompt_construction_contains_data_blocks():
         assert "Fundamental Assessment:" in prompt
         assert "Smart Money Context:" in prompt
         assert "Latest News Headlines:" in prompt
+        assert "Pre-Computed Risk Metrics:" in prompt
+        assert "System Veto State:" in prompt
         assert "AAPL" in prompt
+
+def test_layer_4_auditor_enforcement():
+    """Verify that _enforce_audit_constraints correctly caps confidence and logs it."""
+    from app.service import _enforce_audit_constraints
+    from app.models import AIAnalysisResult, HorizonPerspective, TradeAction, AuditTrail
+    
+    # Create an AI result that breaches the ceiling (e.g. 80.0 vs ceiling of 55.0)
+    perspective = HorizonPerspective(
+        action=TradeAction.BUY, confidence=80.0, entry_price=100.0, 
+        target_price=110.0, stop_loss=95.0, signals=[], rationale="Too bullish"
+    )
+    
+    ai_result = AIAnalysisResult(
+        executive_summary="Bullish",
+        intraday=perspective,
+        audit_trail=AuditTrail()
+    )
+    
+    ceiling = 55.0
+    corrected = _enforce_audit_constraints(ai_result, ceiling)
+    
+    assert corrected.intraday.confidence == 55.0
+    assert len(corrected.audit_trail.constraint_violations) == 1
+    assert corrected.audit_trail.constraint_violations[0].parameter == "intraday.confidence"
+    assert corrected.audit_trail.constraint_violations[0].auto_corrected is True
 
 @pytest.mark.asyncio
 @pytest.mark.live
@@ -121,7 +148,7 @@ async def test_live_ai_synthesis_forced():
     print(f"\n[AI_AUDIT] Requesting FORCED AI synthesis for {ticker}...")
     
     # force_ai=True ignores signal strength/latency thresholds
-    response = await analyze_stock(ticker, mode="all", force_ai=True)
+    response = await analyze_stock(ticker, mode="full", force_ai=True)
     
     assert response.system.engine_logic == "HYBRID", "System should have used HYBRID (AI) engine but used DETERMINISTIC"
     assert response.ai_analysis is not None, "AI analysis block is missing"

@@ -240,6 +240,7 @@ class FundamentalData(BaseModel):
     operating_cash_flow: Optional[float] = None
     net_income: Optional[float] = None
     total_revenue: Optional[float] = None
+    total_assets: Optional[float] = None
     free_cash_flow_margin: Optional[float] = None
     fcf_to_net_income_ratio: Optional[float] = None
     revenue_growth: Optional[float] = None
@@ -473,6 +474,26 @@ class WeightDetail(BaseModel):
     weight: float
     contribution: float
 
+class ConstraintViolation(BaseModel):
+    parameter: str
+    original: float
+    adjusted: float
+    rule: str
+    auto_corrected: bool = False
+
+class ConfidenceAdjustment(BaseModel):
+    original_engine_value: float
+    capped_value: float
+    system_constraint: str
+    conviction_note: Optional[str] = None
+
+class AuditTrail(BaseModel):
+    constraint_violations: List[ConstraintViolation] = []
+    evidence_citations: Dict[str, List[str]] = {}
+    dissent_level: Literal["STRICT_ADHERENCE", "NOTED_CONCERN", "PROBE_RECOMMENDED", "OVERRIDE_REQUEST"] = "STRICT_ADHERENCE"
+    adjustment_justification: Optional[str] = None
+    audit_timestamp: datetime = Field(default_factory=datetime.now)
+
 class AIAnalysisResult(BaseModel):
     executive_summary: str
     investment_thesis: Optional[Union[str, Dict[str, Any]]] = None
@@ -485,6 +506,8 @@ class AIAnalysisResult(BaseModel):
     market_sentiment: Optional[MarketSentiment] = None
     institutional_insight: Optional[str] = None
     consensus_weights: Optional[List[WeightDetail]] = None
+    confidence_adjustments: List[ConfidenceAdjustment] = []
+    audit_trail: Optional[AuditTrail] = None
 
 class StockOverview(BaseModel):
     action: TradeAction
@@ -686,6 +709,9 @@ class AdvancedStockResponse(BaseModel):
     context: ContextBlock
     human_insight: HumanInsightBlock
     system: SystemBlock
+    technicals: Optional[TechnicalStockResponse] = None
+    fundamentals: Optional[AdvancedFundamentalAnalysis] = None
+    news: Optional[NewsResponse] = None
     market_context: Optional[MarketContext] = None 
     ai_analysis: Optional[AIAnalysisResult] = None
 

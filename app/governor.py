@@ -81,6 +81,18 @@ class SignalGovernor:
                 # If date parsing fails, skip rule but don't crash
                 pass
 
+    def check_accrual_quality(self, tracker: UnifiedRejectionTracker, fundamentals: Any):
+        """Check for earnings manipulation risk via Sloan Ratio (Rule 5)"""
+        if fundamentals and hasattr(fundamentals, 'net_income') and hasattr(fundamentals, 'operating_cash_flow') and hasattr(fundamentals, 'total_assets'):
+            from .fundamentals_analytics import AccrualQualityAnalyzer
+            sloan = AccrualQualityAnalyzer.calculate_sloan_ratio(
+                fundamentals.net_income, 
+                fundamentals.operating_cash_flow, 
+                fundamentals.total_assets
+            )
+            if sloan["status"] == "MANIPULATION_RISK_HIGH":
+                tracker.add_violation("RULE_5_EARNINGS_QUALITY_LOW", f"Sloan Ratio {sloan['ratio']:.2f} exceeds 0.10 threshold.")
+
     def apply_trading_rules(self, tracker: UnifiedRejectionTracker, technicals: Technicals, context: Optional[MarketContext], fundamentals: Any):
         """Apply framework trading rules and add to tracker"""
         
@@ -93,6 +105,22 @@ class SignalGovernor:
 
         # Rule 4: Earnings Risk
         self.check_earnings_risk(tracker, context)
+        
+        # Rule 5: Accrual Quality (Audit v20.2)
+        self.check_accrual_quality(tracker, fundamentals)
+
+    def get_veto_state(self, technicals: Technicals, context: Optional[MarketContext], fundamentals: Any = None, ticker: str = "") -> dict:
+        """Returns a serializable state of all active vetoes/violations."""
+        tracker = UnifiedRejectionTracker()
+        self.apply_trading_rules(tracker, technicals, context, fundamentals)
+        integrity = self.assess_data_integrity(technicals, context, ticker)
+        
+        return {
+            "has_violations": tracker.has_violations,
+            "violations": tracker.get_all_violations(),
+            "data_integrity": integrity.value,
+            "is_untradeable_regime": (technicals.atr_percent or 0) > 3.0 and (technicals.adx or 0) < 20
+        }
 
     def _count_recent_insider_sales(self, activity: List[Any], days: int) -> int:
         """Count recent insider sales"""

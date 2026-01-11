@@ -151,7 +151,8 @@ async def get_technical_analysis(ticker: str) -> TechnicalStockResponse:
     if pre_decision:
         reject_setup = TradeSetup(action=TradeAction.REJECT, confidence=ScoreDetail(value=0, min_value=0, max_value=100, label="Rejected", legend=""), setup_state=SetupState.SKIPPED)
         horizons = MultiHorizonSetups(intraday=reject_setup, swing=reject_setup, positional=reject_setup, longterm=reject_setup)
-        return TechnicalStockResponse(overview=StockOverview(action=TradeAction.REJECT, current_price=fallback_price, confidence=reject_setup.confidence, summary=pre_decision.primary_reason), requested_ticker=requested_ticker, ticker=requested_ticker, current_price=fallback_price, trade_setup=reject_setup, horizons=horizons, raw_data=None, pipeline_state=PipelineState(pre_screen=PipelineStageState.FAILED, technicals=PipelineStageState.SKIPPED, scoring=PipelineStageState.SKIPPED, execution=PipelineStageState.SKIPPED), decision_state=DecisionState.REJECT, data_integrity=DataIntegrity.NOT_EVALUATED)
+        pipeline_logger.log_event(requested_ticker, "TECH", "PRE_SCREEN_REJECT", pre_decision.primary_reason)
+        return TechnicalStockResponse(overview=StockOverview(action=TradeAction.REJECT, current_price=fallback_price, confidence=reject_setup.confidence, summary=pre_decision.primary_reason), requested_ticker=requested_ticker, ticker=requested_ticker, current_price=fallback_price, trade_setup=reject_setup, horizons=horizons, raw_data=None, pipeline_state=PipelineState(pre_screen=PipelineStageState.FAILED, technicals=PipelineStageState.SKIPPED, scoring=PipelineStageState.SKIPPED, execution=PipelineStageState.SKIPPED), decision_state=DecisionState.REJECT, data_integrity=DataIntegrity.NOT_EVALUATED, algo_signal=get_empty_algo_signal(), data_confidence=0.0)
 
     horizons_map = {"intraday": "60m", "swing": "1d", "positional": "1wk", "longterm": "1mo"}
     tasks = [fetch_stock_data(requested_ticker, interval=interval) for interval in horizons_map.values()]
@@ -177,19 +178,56 @@ async def get_technical_analysis(ticker: str) -> TechnicalStockResponse:
                 s.position_size_pct = s.max_capital_at_risk = 0.0
 
     primary_data = data_results.get("swing")
+    primary_key = "swing"
     if not primary_data:
         # Emergency Fallback if swing failed but others survived
         for k in ["intraday", "positional", "longterm"]:
             if data_results.get(k):
                 primary_data = data_results[k]
+                primary_key = k
                 break
     
     if not primary_data:
         # All horizons failed
-        return TechnicalStockResponse(overview=StockOverview(action=TradeAction.REJECT, current_price=0.0, confidence=ScoreDetail(value=0, min_value=0, max_value=100, label="Data Failure", legend=""), summary="All data horizons failed to fetch."), requested_ticker=requested_ticker, ticker=requested_ticker, current_price=0.0, trade_setup=reject_setup, horizons=horizons, raw_data=None, pipeline_state=PipelineState(pre_screen=PipelineStageState.PASSED, technicals=PipelineStageState.FAILED, scoring=PipelineStageState.SKIPPED, execution=PipelineStageState.SKIPPED), data_confidence=0.0, data_integrity=DataIntegrity.INVALID, decision_state=DecisionState.REJECT)
+        reject_setup = TradeSetup(action=TradeAction.REJECT, confidence=ScoreDetail(value=0, min_value=0, max_value=100, label="Data Failure", legend=""), setup_state=SetupState.SKIPPED)
+        horizons = MultiHorizonSetups(intraday=reject_setup, swing=reject_setup, positional=reject_setup, longterm=reject_setup)
+        pipeline_logger.log_error(requested_ticker, "TECH", "All data horizons failed to fetch.")
+        return TechnicalStockResponse(overview=StockOverview(action=TradeAction.REJECT, current_price=0.0, confidence=ScoreDetail(value=0, min_value=0, max_value=100, label="Data Failure", legend=""), summary="All data horizons failed to fetch."), requested_ticker=requested_ticker, ticker=requested_ticker, current_price=0.0, trade_setup=reject_setup, horizons=horizons, raw_data=None, pipeline_state=PipelineState(pre_screen=PipelineStageState.PASSED, technicals=PipelineStageState.FAILED, scoring=PipelineStageState.SKIPPED, execution=PipelineStageState.SKIPPED), data_confidence=0.0, data_integrity=DataIntegrity.INVALID, decision_state=DecisionState.REJECT, algo_signal=get_empty_algo_signal())
+
+    # Audit Fix: Ensure global_conf reflects missing technicals immediately
+    if not technical_results.get(primary_key):
+        global_conf = 0.0
+        final_integrity = DataIntegrity.INVALID
+    else:
+        final_integrity = DataIntegrity.VALID if global_conf > 25 else DataIntegrity.DEGRADED
 
     c_price = float(primary_data.get("current_price", 0.0))
-    return TechnicalStockResponse(overview=StockOverview(action=setup_results["swing"].action if setup_results.get("swing") else TradeAction.WAIT, current_price=c_price, confidence=setup_results["swing"].confidence if setup_results.get("swing") else ScoreDetail(value=0, min_value=0, max_value=100, label="N/A", legend=""), summary=f"Audit complete. Confidence: {global_conf:.1f}%"), requested_ticker=requested_ticker, ticker=requested_ticker, current_price=c_price, company_name=primary_data["info"].get("longName"), sector=primary_data["info"].get("sector"), price_change_1d=float(primary_data["dataframe"]['Close'].pct_change().iloc[-1] * 100) if len(primary_data["dataframe"]) > 1 else None, technicals=technical_results.get("swing"), algo_signal=signal_results.get("swing"), trade_setup=setup_results.get("swing") or reject_setup, horizons=MultiHorizonSetups(intraday=setup_results.get("intraday"), swing=setup_results.get("swing"), positional=setup_results.get("positional"), longterm=setup_results.get("longterm")), raw_data=[], pipeline_state=PipelineState(pre_screen=PipelineStageState.PASSED, technicals=PipelineStageState.PASSED, scoring=PipelineStageState.PASSED, execution=PipelineStageState.SKIPPED), data_confidence=global_conf, data_integrity=DataIntegrity.VALID if global_conf > 25 else DataIntegrity.DEGRADED, decision_state=primary_dec.decision_state if primary_dec else DecisionState.WAIT)
+    
+    _algo_sig = signal_results.get(primary_key) or get_empty_algo_signal()
+
+    return TechnicalStockResponse(
+        overview=StockOverview(
+            action=setup_results[primary_key].action if setup_results.get(primary_key) else TradeAction.WAIT, 
+            current_price=c_price, 
+            confidence=setup_results[primary_key].confidence if setup_results.get(primary_key) else ScoreDetail(value=0, min_value=0, max_value=100, label="N/A", legend=""), 
+            summary=f"Audit complete. Confidence: {global_conf:.1f}%"
+        ), 
+        requested_ticker=requested_ticker, 
+        ticker=requested_ticker, 
+        current_price=c_price, 
+        company_name=primary_data["info"].get("longName"), 
+        sector=primary_data["info"].get("sector"), 
+        price_change_1d=float(primary_data["dataframe"]['Close'].pct_change().iloc[-1] * 100) if len(primary_data["dataframe"]) > 1 else None, 
+        technicals=technical_results.get(primary_key), 
+        algo_signal=_algo_sig, 
+        trade_setup=setup_results.get(primary_key) or reject_setup, 
+        horizons=MultiHorizonSetups(intraday=setup_results.get("intraday"), swing=setup_results.get("swing"), positional=setup_results.get("positional"), longterm=setup_results.get("longterm")), 
+        raw_data=[], 
+        pipeline_state=PipelineState(pre_screen=PipelineStageState.PASSED, technicals=PipelineStageState.PASSED, scoring=PipelineStageState.PASSED, execution=PipelineStageState.SKIPPED), 
+        data_confidence=global_conf, 
+        data_integrity=final_integrity, 
+        decision_state=decision_results[primary_key].decision_state if decision_results.get(primary_key) else DecisionState.WAIT
+    )
 
 async def analyze_stock(ticker: str, mode: Any = "all", force_ai: bool = False) -> AdvancedStockResponse:
     from fastapi.concurrency import run_in_threadpool
@@ -249,6 +287,8 @@ async def analyze_stock(ticker: str, mode: Any = "all", force_ai: bool = False) 
     
     if not tech_resp.technicals:
         data_state_taxonomy["TECHNICALS"] = "MISSING"
+        global_conf = 0.0 # Force zero confidence if core technicals are missing
+        data_integrity = DataIntegrity.INVALID
     elif tech_resp.technicals.cci is None: 
         data_state_taxonomy["CCI"] = "MISSING"
 
@@ -275,13 +315,32 @@ async def analyze_stock(ticker: str, mode: Any = "all", force_ai: bool = False) 
     m_comp = round(sig.momentum_score.value/100, 3)
     v_comp = -1.0 if is_overvalued else 1.0 # Scale to full weight
     
-    primary_signal = round((t_comp*0.3 + m_comp*0.2 + expectancy_val*0.25 + v_comp*0.25), 3)
+    # Audit v20.2 Fix: Gated Product Logic (Zero tolerance for mediocrity)
+    if vetoes:
+        primary_signal = -1.0
+    else:
+        primary_signal = round((t_comp*0.3 + m_comp*0.2 + expectancy_val*0.25 + v_comp*0.25), 3)
 
     # --- STAGE 2: NARRATIVE ENGINE ---
     l3_start = time.time()
     ai_analysis = None
     fallback_used = False
     
+    # Pre-compute precision metrics for AI Audit (Task 1)
+    risk_metrics = {}
+    if tech_resp and tech_resp.technicals:
+        risk_metrics = trading_system.risk_engine.calculate_precise_metrics(
+            price=tech_resp.current_price,
+            position_size_pct=tech_resp.trade_setup.position_size_pct or 0.0,
+            stop_loss=tech_resp.trade_setup.stop_loss,
+            atr=tech_resp.technicals.atr or 0.0
+        )
+    
+    # Get Veto State for dissent protocol
+    veto_state = {}
+    if tech_resp and tech_resp.technicals:
+        veto_state = trading_system.governor.get_veto_state(tech_resp.technicals, market_context, fund_resp, requested_ticker)
+
     # Determine if we skip AI
     # Audit Fix: Never skip AI if there are active vetoes or conflicts, as human insight is required.
     has_conflicts = bool(vetoes) or (global_conf < 40)
@@ -293,10 +352,19 @@ async def analyze_stock(ticker: str, mode: Any = "all", force_ai: bool = False) 
         fallback_used = True
     else:
         try:
-            ai_task = interpret_advanced(technical_response=tech_resp, fundamental_response=fund_resp, news_response=news_resp, market_context=market_context, mode=mode, force_ai=force_ai)
-            ai_analysis = await asyncio.wait_for(ai_task, timeout=30.0)
+            ai_task = interpret_advanced(
+                technical_response=tech_resp, 
+                fundamental_response=fund_resp, 
+                news_response=news_resp, 
+                market_context=market_context, 
+                mode=mode, 
+                force_ai=force_ai,
+                risk_metrics=risk_metrics,
+                veto_state=veto_state
+            )
+            ai_analysis = await asyncio.wait_for(ai_task, timeout=settings.AI_TIMEOUT)
         except Exception as e:
-            pipeline_logger.log_error(requested_ticker, "AI", f"Synthesis Error: {str(e)}")
+            pipeline_logger.log_error(requested_ticker, "AI", f"Synthesis Error: {repr(e)}")
             if not force_ai:
                 fallback_used = True
             else:
@@ -304,16 +372,22 @@ async def analyze_stock(ticker: str, mode: Any = "all", force_ai: bool = False) 
                 ai_analysis = None
                 fallback_used = True
 
-    if force_ai and not ai_analysis:
-         pipeline_logger.log_error(requested_ticker, "AI", "Force AI failed to produce analysis.")
-         fallback_used = True
-
     if ai_analysis:
         _enforce_confidence_ceiling(ai_analysis, global_conf, is_authorized, tech_resp.trade_setup.confidence.label)
         _sanitize_ai_signals(ai_analysis, tech_resp.technicals)
+        # Layer 4 Final Audit: Deterministic re-alignment
+        ai_analysis = _enforce_audit_constraints(ai_analysis, global_conf)
 
     total_latency = (time.time() - start_time) * 1000
-    final_summary = ai_analysis.executive_summary if ai_analysis else f"Audit complete. Confidence: {global_conf:.1f}%"
+    
+    # Audit Fix: Enhance summary for rejected trades in fallback mode
+    if ai_analysis:
+        final_summary = ai_analysis.executive_summary
+    else:
+        if not is_authorized and tech_resp.overview.summary:
+            final_summary = f"REJECTED: {tech_resp.overview.summary} (Confidence: {global_conf:.1f}%)"
+        else:
+            final_summary = f"Audit complete. Confidence: {global_conf:.1f}%"
 
     # Final Response Construction
     meta = ResponseMeta(ticker=requested_ticker, timestamp=now_utc, analysis_id=f"{requested_ticker}_{int(start_time)}", data_version="market_v3.2")
@@ -340,6 +414,9 @@ async def analyze_stock(ticker: str, mode: Any = "all", force_ai: bool = False) 
         context=ContextBlock(regime="TRENDING" if adx_val > 25 else "RANGE_BOUND", regime_confidence=round(1 - abs(adx_val - 25)/50, 2), trend_strength_adx=adx_val, volatility_atr_pct=tech_resp.technicals.atr_percent if tech_resp.technicals else 0, volume_ratio=tech_resp.technicals.volume_ratio if tech_resp.technicals else 0),
         human_insight=HumanInsightBlock(summary=final_summary, key_conflicts=_identify_conflicts(tech_resp, market_context), scenarios=_generate_actionable_scenarios(tech_resp, market_context), monitor_triggers=["ADX > 25", "EMA20 Test"]),
         system=SystemBlock(confidence=round(global_conf, 1), data_quality=data_integrity, blocking_issues=[], data_state_taxonomy=data_state_taxonomy, latency_ms=total_latency, layer_timings={"l0_l1_l2_sensors": sensor_latency, "l3_synthesis": (time.time() - l3_start) * 1000}, next_update=now_utc + timedelta(minutes=15), latency_sla_violated=total_latency > 5000, fallback_used=fallback_used, engine_logic="HYBRID" if ai_analysis else "DETERMINISTIC"),
+        technicals=tech_resp,
+        fundamentals=fund_resp,
+        news=news_resp,
         market_context=market_context,
         ai_analysis=ai_analysis
     )
@@ -402,6 +479,31 @@ def _enforce_confidence_ceiling(ai_res: AIAnalysisResult, ceiling: float, is_aut
         if h:
             h.confidence = min(h.confidence, ceiling)
             if not is_authorized: h.entry_price = h.target_price = h.stop_loss = 0.0
+
+def _enforce_audit_constraints(ai_result: AIAnalysisResult, global_ceiling: float) -> AIAnalysisResult:
+    """
+    Final Post-Synthesis Auditor (Layer 4).
+    Forcibly re-aligns AI output to system constraints if they were breached.
+    """
+    if ai_result.audit_trail is None:
+        from .models import AuditTrail
+        ai_result.audit_trail = AuditTrail()
+
+    for horizon_name in ["intraday", "swing", "positional", "longterm"]:
+        h = getattr(ai_result, horizon_name, None)
+        if h:
+            if h.confidence > global_ceiling:
+                from .models import ConstraintViolation
+                ai_result.audit_trail.constraint_violations.append(ConstraintViolation(
+                    parameter=f"{horizon_name}.confidence",
+                    original=float(h.confidence),
+                    adjusted=float(global_ceiling),
+                    rule="System Confidence Cap",
+                    auto_corrected=True
+                ))
+                h.confidence = global_ceiling
+    
+    return ai_result
 
 def _sanitize_ai_signals(ai_result, technicals: Optional[Technicals]):
     if not technicals: return
@@ -474,13 +576,12 @@ async def perform_deep_research(ticker: str) -> ResearchReport:
     return await ResearchEngine(search_tool=search_wrapper).execute_deep_research(ticker)
 
 async def get_fundamental_analysis(ticker: str) -> Any:
-    from fastapi.concurrency import run_in_threadpool
-    return await run_in_threadpool(lambda: get_fundamentals(ticker))
+    from .fundamentals import get_fundamentals
+    return await get_fundamentals(ticker)
 
 async def get_advanced_fundamental_analysis(ticker: str) -> AdvancedFundamentalAnalysis:
-    from fastapi.concurrency import run_in_threadpool
     from .fundamentals import get_advanced_fundamentals
-    return await run_in_threadpool(lambda: get_advanced_fundamentals(ticker))
+    return await get_advanced_fundamentals(ticker)
 
 async def get_news_analysis(ticker: str) -> NewsResponse:
     from .news_fetcher import UnifiedNewsFetcher

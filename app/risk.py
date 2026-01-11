@@ -77,3 +77,21 @@ class RiskEngine:
         """Returns the percentage of total capital at risk: (Position Size % * SL %)"""
         if price <= 0: return 0.0
         return round(position_size_pct * (risk_per_share / price), 4)
+
+    def calculate_precise_metrics(self, 
+                                 price: float, 
+                                 position_size_pct: float, 
+                                 stop_loss: Optional[float], 
+                                 atr: float) -> dict:
+        """Computes precise risk metrics for AI citation."""
+        risk_per_share = abs(price - stop_loss) if stop_loss else 0.0
+        sl_pct = (risk_per_share / price) * 100 if price > 0 else 0.0
+        
+        return {
+            "position_size_pct": round(position_size_pct, 2),
+            "capital_at_risk_pct": self.calculate_capital_at_risk(position_size_pct, risk_per_share, price),
+            "risk_per_share": round(risk_per_share, 2),
+            "stop_loss_pct": round(sl_pct, 2),
+            "atr_percent": round((atr / price) * 100, 2) if price > 0 else 0.0,
+            "stop_distance_in_atr": round(risk_per_share / atr, 2) if atr > 0 else 0.0
+        }

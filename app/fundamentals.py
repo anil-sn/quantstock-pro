@@ -19,20 +19,34 @@ from .fundamentals_analytics import (
     IntrinsicValuationEngine, FCFQualityAnalyzer
 )
 from .settings import settings
+from .cache import cache_manager
 
-@cached(cache=TTLCache(maxsize=128, ttl=3600))
-def get_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]]:
+async def get_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]]:
+    cache_key = f"fund_raw:{ticker.upper()}"
+    cached_data = await cache_manager.get(cache_key)
+    if cached_data:
+        # Reconstruct Pydantic model
+        data = FundamentalData(**cached_data[0])
+        return data, cached_data[1]
+
     data, info = fetch_raw_fundamentals(ticker)
     data.inferences, data.risk_assessment = derive_qualitative_inferences(data)
     quality, sentiment = calculate_quality_grade(data, sector=data.sector or "Default")
     data.quality_score = quality
     data.inferences.overall_sentiment = sentiment
+    
+    # Store in cache
+    await cache_manager.set(cache_key, [data.model_dump(), info], ttl=3600)
     return data, info
 
-@cached(cache=TTLCache(maxsize=128, ttl=3600))
-def get_advanced_fundamentals(ticker: str) -> AdvancedFundamentalAnalysis:
+async def get_advanced_fundamentals(ticker: str) -> AdvancedFundamentalAnalysis:
     """The Final 'Nail': Institutional-Grade Analysis Orchestrator."""
-    data, raw_info = get_fundamentals(ticker) 
+    cache_key = f"fund_adv:{ticker.upper()}"
+    cached_data = await cache_manager.get(cache_key)
+    if cached_data:
+        return AdvancedFundamentalAnalysis(**cached_data)
+
+    data, raw_info = await get_fundamentals(ticker) 
     history = fetch_historical_financials(ticker)
     
     # 1. Logic Layers (Using already computed quality score)
@@ -259,12 +273,19 @@ def get_advanced_fundamentals(ticker: str) -> AdvancedFundamentalAnalysis:
         }
     )
 
-def get_news(ticker: str) -> List[NewsItem]:
+async def get_news(ticker: str) -> List[NewsItem]:
     from .fundamentals_fetcher import yf
     from .models import NewsItem
+    from fastapi.concurrency import run_in_threadpool
+    
+    cache_key = f"news_raw:{ticker.upper()}"
+    cached_data = await cache_manager.get(cache_key)
+    if cached_data:
+        return [NewsItem(**n) for n in cached_data]
+
     try:
         stock = yf.Ticker(ticker)
-        raw_news = stock.news
+        raw_news = await run_in_threadpool(lambda: stock.news)
         parsed_news = []
         if raw_news:
             for n in raw_news[:10]:
@@ -293,9 +314,11 @@ def get_news(ticker: str) -> List[NewsItem]:
                     link=link, 
                     publish_time=pub_time
                 ))
+        
+        await cache_manager.set(cache_key, [n.model_dump() for n in parsed_news], ttl=1800)
         return parsed_news
     except Exception as e:
         from .logger import pipeline_logger
-        pipeline_logger.log_error(ticker, "NEWS_FETCHER", f"Yahoo News fetch failure: {e}")
+        pipeline_logger.log_error(ticker, "NEWS_FETCHER", f"Yahoo News fetch failure: {repr(e)}")
         return []
         

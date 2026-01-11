@@ -7,12 +7,14 @@ from datetime import datetime
 from async_lru import alru_cache
 from .models import NewsItem
 from .settings import settings
+from .logger import pipeline_logger
 import urllib.parse
 
 class UnifiedNewsFetcher:
     """Fetches and merges news from multiple sources (Yahoo, Google, NewsAPI)"""
 
     @classmethod
+    @alru_cache(maxsize=128, ttl=7200)
     async def fetch_news_api(cls, ticker: str) -> List[NewsItem]:
         """Fetch high-relevancy articles from NewsAPI.org with SSL resilience"""
         if not settings.NEWS_API_KEY:
@@ -99,19 +101,84 @@ class UnifiedNewsFetcher:
             return []
 
     @classmethod
+    async def fetch_finnhub_news(cls, ticker: str) -> List[NewsItem]:
+        """Fetch stock news from Finnhub.io"""
+        if not settings.FINNHUB_API_KEY:
+            return []
+            
+        import finnhub
+        from datetime import datetime, timedelta
+        
+        try:
+            finnhub_client = finnhub.Client(api_key=settings.FINNHUB_API_KEY)
+            
+            # Get news for the last 7 days
+            to_date = datetime.now().strftime('%Y-%m-%d')
+            from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+            
+            # run_in_threadpool because finnhub-python is synchronous
+            from fastapi.concurrency import run_in_threadpool
+            raw_news = await run_in_threadpool(lambda: finnhub_client.company_news(ticker, _from=from_date, to=to_date))
+            
+            items = []
+            for n in raw_news[:10]:
+                items.append(NewsItem(
+                    title=n.get('headline', ''),
+                    publisher=n.get('source', 'Finnhub'),
+                    link=n.get('url', ''),
+                    publish_time=n.get('datetime', int(datetime.now().timestamp()))
+                ))
+            return items
+        except Exception as e:
+            pipeline_logger.log_error(ticker, "NEWS_FETCHER", f"Finnhub Fetch Error: {repr(e)}")
+            return []
+
+    @classmethod
+    async def fetch_stocknews(cls, ticker: str) -> List[NewsItem]:
+        """Fetch news and sentiment from StockNews library"""
+        if not settings.WT_KEY:
+            return []
+            
+        from stocknews import StockNews
+        from fastapi.concurrency import run_in_threadpool
+        
+        try:
+            # StockNews is synchronous and uses pandas
+            sn = await run_in_threadpool(lambda: StockNews([ticker], wt_key=settings.WT_KEY))
+            df = await run_in_threadpool(lambda: sn.summarize())
+            
+            items = []
+            # Extract headlines from the summary DataFrame if available
+            if not df.empty:
+                for _, row in df.iterrows():
+                    items.append(NewsItem(
+                        title=row.get('title', f"News update for {ticker}"),
+                        publisher="StockNews",
+                        link=row.get('url', ''),
+                        publish_time=int(datetime.now().timestamp())
+                    ))
+            return items
+        except Exception as e:
+            pipeline_logger.log_error(ticker, "NEWS_FETCHER", f"StockNews Fetch Error: {repr(e)}")
+            return []
+
+    @classmethod
     @alru_cache(maxsize=128, ttl=3600)
     async def fetch_all(cls, ticker: str) -> List[NewsItem]:
         """Fetch from all sources and deduplicate by title (1-hour cache)"""
         from .fundamentals import get_news as get_yahoo_news
         
         # Run in parallel
-        yahoo_task = asyncio.get_event_loop().run_in_executor(None, get_yahoo_news, ticker)
-        google_task = cls.fetch_google_news(ticker)
-        newsapi_task = cls.fetch_news_api(ticker)
+        # Audit Fix: Added StockNews as a high-fidelity alternative
+        results = await asyncio.gather(
+            get_yahoo_news(ticker),
+            cls.fetch_google_news(ticker),
+            cls.fetch_news_api(ticker),
+            cls.fetch_finnhub_news(ticker),
+            cls.fetch_stocknews(ticker)
+        )
         
-        results = await asyncio.gather(yahoo_task, google_task, newsapi_task)
-        
-        all_news = results[0] + results[1] + results[2]
+        all_news = results[0] + results[1] + results[2] + results[3] + results[4]
         
         # Deduplicate
         seen_titles = set()

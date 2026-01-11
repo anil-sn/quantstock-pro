@@ -71,6 +71,12 @@ async def _interpret_cached(ticker: str, prompt: str, system_instruct: str, cach
                 if "executive_summary" not in result and "ticker" in result:
                     result["executive_summary"] = f"Analysis for {result['ticker']}"
                 
+                # 1b. Handle non-string rejection_analysis (Audit Fix)
+                if "rejection_analysis" in result and isinstance(result["rejection_analysis"], dict):
+                    # Coerce dict to string for schema compliance
+                    rej_dict = result["rejection_analysis"]
+                    result["rejection_analysis"] = f"Dissent Logic: {json.dumps(rej_dict)}"
+                
                 # 2. Handle non-dict market_sentiment
                 if "market_sentiment" in result and not isinstance(result["market_sentiment"], dict):
                     lbl = str(result["market_sentiment"])
@@ -136,7 +142,9 @@ async def interpret_advanced(
     market_context: Optional[MarketContext] = None,
     mode: str = "all",
     system_instruction: str = "",
-    force_ai: bool = False
+    force_ai: bool = False,
+    risk_metrics: Optional[Dict[str, Any]] = None,
+    veto_state: Optional[Dict[str, Any]] = None
 ) -> AIAnalysisResult | None:
     try:
         # --- OPTIMIZATION: DETERMINISTIC BYPASS ---
@@ -194,6 +202,12 @@ async def interpret_advanced(
         
         Latest News Headlines:
         {json.dumps(news_summary, indent=2)}
+
+        Pre-Computed Risk Metrics:
+        {json.dumps(risk_metrics, indent=2) if risk_metrics else "N/A"}
+
+        System Veto State:
+        {json.dumps(veto_state, indent=2) if veto_state else "N/A"}
         </MARKET_DATA>
 
         STRICT INSTRUCTIONS:
@@ -241,9 +255,33 @@ async def interpret_advanced(
         """
 
         # Baked-in Constitution
-        base_system = system_instruction or """You are AlphaCore v20.2, a Senior Quantitative Strategist.
+        base_system = system_instruction or """You are an Institutional Forensic Auditor for QuantStock-Pro.
+        Your role is to AUDIT quantitative outputs, not generate them.
         You MUST output a single valid JSON object following the AIAnalysisResult schema.
-        Ensure 'executive_summary' contains the Markdown structured report requested in the prompt.
+        
+        **AUDIT PROTOCOL - NON-NEGOTIABLE:**
+        
+        1. **CONSTRAINT ENFORCEMENT**
+           - MAX confidence: {technical_response.data_confidence:.1f}. Any value > this = ADJUST DOWN.
+           - Price levels MUST use provided S/R: Intraday=R1/S1, Swing=R2/S2.
+           - Risk calculations MUST cite pre-computed 'Pre-Computed Risk Metrics' only.
+        
+        2. **EVIDENCE GROUNDING REQUIREMENTS**
+           Every claim MUST cite exact metric values provided in <MARKET_DATA>:
+           - Technical: Cite 'primary_indicators' or 'multi_horizon_setups'.
+           - Fundamental: Cite 'Fundamental Assessment' or P/E ratios.
+           - Risk: Cite 'Pre-Computed Risk Metrics'.
+        
+        3. **DISSENT PROTOCOL** (When disagreeing with system)
+           If 'System Veto State' has violations but you find contradictory evidence, you MUST use one of these levels in your 'rejection_analysis':
+           A. STRICT_ADHERENCE: Follow veto without comment.
+           B. NOTED_CONCERN: "Note: {concern} but obeying veto".
+           C. PROBE_RECOMMENDED: "Consider 0.5% probe if {conditions}".
+           D. OVERRIDE_REQUEST: "Contradictory evidence found, review recommended".
+        
+        4. **ADJUSTMENT LOGGING** (Required for ALL changes)
+           If you change a confidence or level value, start your rationale with:
+           "AUDIT_ADJUSTMENT: {param} from {original} to {adjusted} due to {reason}"
         
         CRITICAL SCHEMA RULES:
         1. 'executive_summary' and 'investment_thesis' MUST be strings.

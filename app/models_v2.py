@@ -5,7 +5,8 @@ from datetime import datetime
 from .models import (
     TradeAction, RiskLevel, DataIntegrity, DecisionState, SetupState, 
     TechnicalStockResponse, AdvancedFundamentalAnalysis, NewsResponse, 
-    MarketContext, ResearchReport, AIAnalysisResult, ScoreDetail, OHLCV
+    MarketContext, ResearchReport, AIAnalysisResult, ScoreDetail, OHLCV,
+    HumanInsightBlock, SystemBlock, LevelsBlock, SignalsBlock, ContextBlock
 )
 
 class AnalysisMode(str, Enum):
@@ -50,6 +51,11 @@ class AnalysisResponse(BaseModel):
     news: Optional[NewsResponse] = None
     context: Optional[MarketContext] = None
     ai_insights: Optional[AIAnalysisResult] = None
+    human_insight: Optional[HumanInsightBlock] = None
+    system: Optional[SystemBlock] = None
+    levels: Optional[LevelsBlock] = None
+    signals: Optional[SignalsBlock] = None
+    context_v2: Optional[ContextBlock] = Field(None, alias="context_block")
 
 class HealthResponse(BaseModel):
     status: str

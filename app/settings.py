@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     GOOGLE_SEARCH_API_KEY: Optional[str] = None
     GOOGLE_CSE_ID: Optional[str] = None
     NEWS_API_KEY: Optional[str] = None
+    FINNHUB_API_KEY: Optional[str] = None
+    WT_KEY: Optional[str] = None
     API_KEY: Optional[str] = None
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
     SENTRY_DSN: Optional[str] = None
@@ -46,7 +48,7 @@ class Settings(BaseSettings):
     
     # Timeouts
     YFINANCE_TIMEOUT: int = 10
-    AI_TIMEOUT: int = 30
+    AI_TIMEOUT: int = 60
 
     # Risk Parameters
     MAX_POSITION_PCT: float = 5.0
