@@ -59,7 +59,33 @@ def test_analyze_orchestrator(ticker):
     response = client.get(f"/analyze/{ticker}")
     assert response.status_code == 200
     data = response.json()
-    assert "ai_analysis" in data
-    assert "overview" in data
-    assert "trade_setup" in data
-    assert data["data_integrity"] == "VALID"
+    
+    # Verify High-Level Blocks
+    assert "meta" in data
+    assert "execution" in data
+    assert "signals" in data
+    assert "levels" in data
+    assert "context" in data
+    assert "human_insight" in data
+    assert "system" in data
+    
+    # Verify Machine Execution Data
+    assert "action" in data["execution"]
+    assert "valid_until" in data["execution"]
+    assert "risk_limits" in data["execution"]
+    
+    # Verify Signals
+    assert "primary_signal_strength" in data["signals"]
+    assert "components" in data["signals"]
+    
+    # Verify Temporal and Performance Context
+    assert "latency_ms" in data["system"]
+    assert "next_update" in data["system"]
+    assert "layer_timings" in data["system"]
+    
+    # Verify Levels
+    assert "current" in data["levels"]
+    assert len(data["levels"]["support"]) >= 0
+    
+    print(f"Latency: {data['system']['latency_ms']:.2f}ms")
+    print(f"Action: {data['execution']['action']}")

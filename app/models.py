@@ -92,28 +92,24 @@ class TradeAction(str, Enum):
     HOLD = "HOLD"
     WAIT = "WAIT"
     REJECT = "REJECT"
-    PROBE = "PROBE" # Small tactical entry in ambiguous but positive expectancy states
+    PROBE = "PROBE"
 
     @classmethod
     def _missing_(cls, value: object) -> Any:
         if not isinstance(value, str):
             return super()._missing_(value)
         v = value.upper()
-        if "ACCUMULATE" in v or "ADD" in v:
-            return cls.BUY
-        if "REDUCE" in v or "TRIM" in v:
-            return cls.SELL
-        if "NEUTRAL" in v:
-            return cls.HOLD
-        if "PROBE" in v:
-            return cls.PROBE
+        if "ACCUMULATE" in v or "ADD" in v: return cls.BUY
+        if "REDUCE" in v or "TRIM" in v: return cls.SELL
+        if "NEUTRAL" in v: return cls.HOLD
+        if "PROBE" in v: return cls.PROBE
         return super()._missing_(value)
 
 # --- SUB-MODELS ---
 class ExpectancyDetail(BaseModel):
-    p_win: float # 0.0 to 1.0
-    expected_value: float # Profit factor per unit risked
-    regime_edge: str # Description of the specific edge found
+    p_win: float
+    expected_value: float
+    regime_edge: str
 
 class SentimentDetail(BaseModel):
     label: str
@@ -175,7 +171,6 @@ class ScoreDetail(BaseModel):
     label: str
     legend: str
 
-# --- COMPREHENSIVE OUTPUT MODEL ---
 class AdvancedFundamentalAnalysis(BaseModel):
     analytical_engine: Dict[str, Any]
     analysis_header: Dict[str, Any]
@@ -190,7 +185,6 @@ class AdvancedFundamentalAnalysis(BaseModel):
     base_data: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any]
 
-# --- BASE DATA MODEL ---
 class AnalystEstimates(BaseModel):
     target_mean_price: Optional[float] = None
     target_median_price: Optional[float] = None
@@ -284,22 +278,21 @@ class NewsItem(BaseModel):
 
 class NewsSignal(BaseModel):
     headline: str
-    signal_strength: float # -100 to 100
-    impact_category: str # "Momentum", "Hype", "Fundamental", "Risk"
+    signal_strength: float
+    impact_category: str
     is_primary_source: bool
 
 class NewsIntelligence(BaseModel):
-    signal_score: float # Weighted aggregate of signals
-    noise_ratio: float # Percentage of headlines classified as generic/hype
-    source_diversity: float # 0 to 1.0 (Unique Publishers / Total items)
+    signal_score: float
+    noise_ratio: float
+    source_diversity: float
     narrative_trap_warning: bool
     summary: str
 
-# --- RESEARCH MODELS ---
 class SourceCategory(str, Enum):
     ACADEMIC = "academic"
-    GOVERNMENT = "government" # SEC, Regulators
-    PRIMARY_CORPORATE = "primary_corporate" # IR, Transcripts
+    GOVERNMENT = "government"
+    PRIMARY_CORPORATE = "primary_corporate"
     NEWS = "news"
     ANALYSIS = "analyst_research"
     OTHER = "other"
@@ -308,17 +301,17 @@ class ResearchSource(BaseModel):
     title: str
     url: str
     category: SourceCategory
-    credibility_score: float # 0.0 to 1.0
+    credibility_score: float
     publisher: Optional[str] = None
 
 class Finding(BaseModel):
     fact: str
-    citation_indices: List[int] # Indices in the sources list
+    citation_indices: List[int]
     iteration: int
 
 class SourceDiversity(BaseModel):
     category_distribution: Dict[SourceCategory, int]
-    overall_diversity_score: float # 0 to 1.0
+    overall_diversity_score: float
     is_diversified: bool
     bias_warning: Optional[str] = None
 
@@ -329,13 +322,12 @@ class ResearchIteration(BaseModel):
 
 class ResearchReport(BaseModel):
     ticker: str
-    synthesis: str # AI-generated with IEEE citations [1]
+    synthesis: str
     iterations: List[ResearchIteration]
     diversity_metrics: SourceDiversity
     total_sources: int
     timestamp: datetime = Field(default_factory=datetime.now)
 
-# --- OTHER SYSTEM MODELS ---
 class NewsResponse(BaseModel):
     ticker: str
     news: List[NewsItem]
@@ -343,7 +335,6 @@ class NewsResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
 
 class CompositeQualityScore(BaseModel):
-    """Comprehensive quality scoring system"""
     overall_score: float
     grade: QualityGrade
     profitability_score: float
@@ -411,19 +402,16 @@ class Technicals(BaseModel):
 class SignalImpact(BaseModel):
     indicator: str
     direction: Literal["Bullish", "Bearish", "Neutral"]
-    weight: int = Field(..., ge=0, le=10, description="Significance of this indicator to the thesis (0-10)")
+    weight: int = Field(..., ge=0, le=10)
     value_at_analysis: Union[float, str, None] = None
 
     @field_validator('direction', mode='before')
     @classmethod
     def normalize_direction(cls, v: str) -> str:
-        if not isinstance(v, str):
-            return v
+        if not isinstance(v, str): return v
         v_low = v.lower()
-        if "bull" in v_low:
-            return "Bullish"
-        if "bear" in v_low:
-            return "Bearish"
+        if "bull" in v_low: return "Bullish"
+        if "bear" in v_low: return "Bearish"
         return "Neutral"
 
 class MarketSentiment(BaseModel):
@@ -486,7 +474,7 @@ class WeightDetail(BaseModel):
 
 class AIAnalysisResult(BaseModel):
     executive_summary: str
-    investment_thesis: Optional[str] = None
+    investment_thesis: Optional[Union[str, Dict[str, Any]]] = None
     rejection_analysis: Optional[str] = None
     intraday: Optional[HorizonPerspective] = None
     swing: Optional[HorizonPerspective] = None
@@ -608,26 +596,94 @@ class TradingDecision(BaseModel):
     entry_zone: Optional[Tuple[float, float]] = None
     setup_quality: Optional[SetupQuality] = None
 
-class AdvancedStockResponse(BaseModel):
-    analysis_mode: AnalysisMode = AnalysisMode.ALL
-    overview: StockOverview
-    requested_ticker: str
+class ResponseMeta(BaseModel):
     ticker: str
-    company_name: Optional[str] = None
-    sector: Optional[str] = None
-    current_price: float
-    price_change_1d: Optional[float] = None
-    technicals: Optional[Technicals] = None
-    algo_signal: Optional[AlgoSignal] = None
-    trade_setup: TradeSetup
-    ai_analysis: Optional[AIAnalysisResult] = None
-    risk_metrics: Optional[RiskMetrics] = None
-    market_context: Optional[MarketContext] = None
-    pipeline_state: Optional[PipelineState] = None
-    data_confidence: float = 100.0
-    is_trade_authorized: bool = False
-    data_integrity: DataIntegrity = DataIntegrity.VALID
-    decision_state: DecisionState = DecisionState.WAIT
     timestamp: datetime = Field(default_factory=datetime.now)
+    version: str = "AlphaCore v20.2"
+    analysis_id: str
+    data_version: str = "market_v3.2"
+
+class RiskLimits(BaseModel):
+    max_position_pct: float
+    max_capital_risk_pct: float
+    daily_loss_limit_pct: float
+
+class ExecutionBlock(BaseModel):
+    action: TradeAction
+    authorized: bool
+    urgency: str # LOW, MEDIUM, HIGH, IMMEDIATE
+    valid_until: datetime
+    risk_limits: RiskLimits
+    vetoes: List[Dict[str, Any]] = []
+
+class SignalComponent(BaseModel):
+    score: float # Normalized [-1, 1]
+    weight: float
+    signal: str
+
+class SignalsBlock(BaseModel):
+    actionable: bool
+    primary_signal_strength: float # Normalized [0, 1]
+    required_strength: float
+    components: Dict[str, SignalComponent]
+    normalization_method: str = "Z-SCORE_CLAMPED"
+    expectancy_weighting: float = 0.25
+
+class LevelItem(BaseModel):
+    price: float
+    strength: float
+    type: str
+    distance_pct: float
+
+class ValueZone(BaseModel):
+    min: float
+    max: float
+    attractiveness: float
+    type: str
+
+class LevelsBlock(BaseModel):
+    current: float
+    timestamp: datetime
+    support: List[LevelItem]
+    resistance: List[LevelItem]
+    value_zones: List[ValueZone]
+
+class ContextBlock(BaseModel):
+    regime: str
+    regime_confidence: float
+    trend_strength_adx: float
+    volatility_atr_pct: float
+    volume_ratio: float
+    transition_watch: List[str] = []
+
+class HumanInsightBlock(BaseModel):
+    summary: str
+    key_conflicts: List[str]
+    scenarios: Dict[str, Any]
+    monitor_triggers: List[str]
+    probability_basis: str = "HEURISTIC"
+
+class SystemBlock(BaseModel):
+    confidence: float # SINGLE SOURCE OF TRUTH
+    data_quality: DataIntegrity
+    blocking_issues: List[str]
+    data_state_taxonomy: Dict[str, str] = {}
+    latency_ms: float
+    layer_timings: Dict[str, float] = {}
+    next_update: datetime
+    latency_sla_violated: bool = False
+    sla_threshold_ms: float = 5000.0
+    fallback_used: bool = False
+    engine_logic: str = "DETERMINISTIC"
+
+class AdvancedStockResponse(BaseModel):
+    meta: ResponseMeta
+    execution: ExecutionBlock
+    signals: SignalsBlock
+    levels: LevelsBlock
+    context: ContextBlock
+    human_insight: HumanInsightBlock
+    system: SystemBlock
+    market_context: Optional[MarketContext] = None 
 
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})

@@ -77,14 +77,19 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
             last_updated=datetime.now()
         )
         
-        # Identity & Valuation
+        # identity & Valuation
         data.market_cap = info.get("marketCap") or info.get("enterpriseValue")
         data.enterprise_value = info.get("enterpriseValue")
         data.trailing_pe = info.get("trailingPE")
         data.forward_pe = info.get("forwardPE")
         
+        # Indian Stock Fallback: sharesOutstanding is often missing in root info
+        shares = info.get("sharesOutstanding")
+        if not shares and data.market_cap and current_price:
+            shares = int(data.market_cap / current_price)
+        data.shares_outstanding = shares
+
         # Audit 7.3.0 Fix: PE Ratio Fallback
-        current_price = info.get("currentPrice") or info.get("regularMarketPrice")
         forward_eps = info.get("forwardEps")
         if not data.forward_pe and current_price and forward_eps:
             try:
@@ -95,7 +100,7 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
         data.price_to_book = info.get("priceToBook")
         data.enterprise_to_ebitda = info.get("enterpriseToEbitda")
         
-        # Audit 7.5.0 Fix: Explicit Metric Calculations (Lazy implementation removal)
+        # Explicit Metric Calculations
         total_rev = info.get("totalRevenue")
         if data.enterprise_value and total_rev and total_rev > 0:
             data.enterprise_to_revenue = data.enterprise_value / total_rev
@@ -110,9 +115,8 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
         data.book_value = info.get("bookValue")
         data.dividend_rate = info.get("dividendRate")
         
-        # Audit 9.0.0: Temporal Synchronization of Profitability
-        # Anchoring all returns to info.get("netIncomeToCommon") to prevent ROE/NI contradictions
-        net_income_anchor = info.get("netIncomeToCommon")
+        # Anchor profitability to netIncomeToCommon with NetIncome fallback
+        net_income_anchor = info.get("netIncomeToCommon") or info.get("netIncome")
         data.net_income = net_income_anchor
         data.total_revenue = total_rev
         
@@ -122,8 +126,7 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
         data.ebitda_margins = info.get("ebitdaMargins")
         data.ebitda = info.get("ebitda")
         
-        # Re-calculating ROE/ROA from synchronized anchor if available
-        # This prevents the Audit failure where NI was positive but ROE was negative
+        # ROE/ROA from synchronized anchor
         equity = info.get("totalStockholderEquity")
         if net_income_anchor is not None and equity and equity > 0:
             data.return_on_equity = net_income_anchor / equity
@@ -138,17 +141,14 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
             
         data.return_on_invested_capital = info.get("returnOnInvestedCapital")
         
-        # Invested Capital Calculation (Audit 6.1 Fix)
-        # Formula: Debt + Equity - Cash
-        if data.total_debt is not None and data.total_cash is not None:
+        # Invested Capital Calculation (Safe null check)
+        if info.get("totalDebt") is not None and info.get("totalCash") is not None:
             equity_val = equity or (data.market_cap if data.market_cap else 0)
-            data.invested_capital = data.total_debt + equity_val - data.total_cash
+            data.invested_capital = info.get("totalDebt") + equity_val - info.get("totalCash")
         
         # Cash Flow
         data.free_cash_flow = info.get("freeCashflow")
         data.operating_cash_flow = info.get("operatingCashflow")
-        data.net_income = info.get("netIncomeToCommon")
-        data.total_revenue = info.get("totalRevenue")
         
         if data.total_revenue and data.free_cash_flow:
             data.free_cash_flow_margin = data.free_cash_flow / data.total_revenue
@@ -156,22 +156,18 @@ def fetch_raw_fundamentals(ticker: str) -> Tuple[FundamentalData, Dict[str, Any]
             data.fcf_to_net_income_ratio = data.free_cash_flow / abs(data.net_income)
             if data.net_income < 0: data.fcf_to_net_income_ratio *= -1
         
-        # Growth - STANDARDIZED (Audit Fix)
-        # We calculate YoY from quarterly data to be safe, falling back to Yahoo's field
+        # Growth - STANDARDIZED
         q_fin = stock.quarterly_financials
         calc_growth = calculate_revenue_growth_yoy(q_fin)
         data.revenue_growth = calc_growth if calc_growth is not None else info.get("revenueGrowth")
         data.earnings_growth = info.get("earningsGrowth")
         
-        # PE Adjustment MUST happen AFTER growth is set
+        # PE Adjustment
         if data.forward_pe and data.revenue_growth and data.revenue_growth != 0:
-            # Peg-style calculation: Forward PE / Revenue Growth (e.g. 29 / 32 = 0.9)
-            # We use the raw percentage value (32.1 for 32.1%)
             growth_pct = abs(data.revenue_growth * 100)
             if growth_pct >= 1.0:
                 data.rev_growth_adjusted_pe = data.forward_pe / growth_pct
             else:
-                # Handle near-zero growth to avoid pathological ratios
                 data.rev_growth_adjusted_pe = data.forward_pe
 
         if data.total_revenue:

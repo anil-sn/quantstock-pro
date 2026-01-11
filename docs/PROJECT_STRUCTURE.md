@@ -1,70 +1,32 @@
-# Project Structure and Functionality Map
+# Project Structure
 
-This document outlines the file structure of the `quantstock-pro` project and the specific responsibilities of each module.
+## Architecture Overview
+The system follows a strict **"Perceive-Reason-Act"** architecture, split into two execution speeds to handle LLM latency.
 
-## Root Directory
+### 1. Data Ingestion (Perceive)
+*   **Context Layer**: Insiders, Options, Analyst Targets.
+*   **Sensor Layer**: OHLCV data, Financial Statements, News Feeds.
+*   **Research Layer**: Deep web search iterations for fundamental grounding.
 
-*   **`README.md`**: Project overview, installation, and usage guide.
-*   **`THE_COMPLETE_FRAMEWORK.md`**: The "Constitution". Defines the trading strategy, risk management rules, and operational philosophy (S-Tier requirements).
-*   **`pyproject.toml`**: Dependency management and build configuration (FastAPI, pandas-ta, yfinance, google-genai).
-*   **`Evaluation.md`**: External audit log and feedback for system improvement.
-*   **`PROJECT_STRUCTURE.md`**: (This file) Navigation aid.
-*   **`TODO.md`**: Roadmap and change tracking.
+### 2. Analytical Core (Reason)
+*   **Technicals Module**: Calculates multi-horizon indicators and trend structure.
+*   **Fundamentals Module**: Quantitative business quality scoring and Intrinsic Valuation (DCF).
+*   **News Intelligence**: Noise/Signal classification.
+*   **Alpha Expectancy (L2)**: Bayesian P_Win estimation and EV calculation.
 
-## `app/` Directory (Core Logic)
+### 3. Governance & Authority (Refine)
+*   **Signal Governor**: Applies trading rules (Vetoes).
+*   **Confidence Ceiling**: Clamps sub-module confidence to the global system limit.
+*   **Single Source of Truth**: Enforces consistent scalars across human and machine payloads.
 
-*   **`main.py`**:
-    *   **Entry Point**: Initializes the FastAPI application.
-    *   **Middleware**: Sets up Prometheus instrumentation.
-    *   **Routes**: Includes the API router.
-    *   **Health Check**: `/health` endpoint.
+### 4. Execution Logic (Act)
+*   **Fast Path**: Deterministic rule engine issuing decisions in <500ms.
+*   **Slow Path**: AI synthesis for executive summaries and scenarios (async/optional).
+*   **Trade Executor**: Level calculation (Stop-loss, Entry zones).
 
-*   **`api.py`**:
-    *   **Router**: Defines REST endpoints:
-        *   `GET /analyze/{ticker}`: Full AI + Quantitative analysis.
-        *   `GET /technical/{ticker}`: Raw technicals and algo score.
-        *   `GET /fundamentals/{ticker}`: Financial data.
-        *   `GET /context/{ticker}`: Market context (analysts, insiders).
-    *   **Delegation**: Calls functions in `service.py`.
-
-*   **`service.py`**:
-    *   **The Governor**: Implements `STierTradingSystem` class.
-    *   **State Machine**: Manages `DecisionState` (ACCEPT, WAIT, REJECT) and `SetupState`.
-    *   **Risk Engine**: Enforces `RiskParameters` (0.5% max risk).
-    *   **Orchestration**: Combines Technicals, Fundamentals, and Context to produce a `TradingDecision`.
-    *   **Data Integrity**: Sanitizes inputs and hard-nulls poisoned indicators.
-
-*   **`models.py`**:
-    *   **Schema Definitions**: Pydantic models for all API responses.
-    *   **Enums**: `DecisionState`, `DataIntegrity`, `SetupState`, `SetupQuality`, `TradeAction`.
-    *   **Type Safety**: Ensures strict data contracts between layers.
-
-*   **`technicals.py`**:
-    *   **Math Engine**: Calculates indicators (RSI, MACD, ADX, CCI, Bollinger Bands) using `pandas-ta`.
-    *   **Scoring**: Computes the "Algo Signal" (-100 to +100).
-    *   **Poison Detection**: Identifies and hard-nulls invalid indicator values (e.g., CCI > 500).
-
-*   **`ai.py`**:
-    *   **LLM Interface**: interactions with Google Gemini.
-    *   **Prompt Engineering**: Constructs strict, context-aware prompts based on the Governor's state.
-    *   **Output Parsing**: Validates and parses the AI's JSON response.
-
-*   **`market_data.py`**:
-    *   **Data Access**: Fetches historical price data and company info via `yfinance`.
-    *   **Concurrency**: Uses `asyncio` for non-blocking I/O.
-
-*   **`fundamentals.py`**:
-    *   **Financials**: Fetches balance sheet, income statement, and valuation metrics.
-    *   **Sanity Checks**: Validates data relationships (e.g., EV vs Market Cap).
-
-*   **`context.py`**:
-    *   **Smart Money**: Fetches Insider Trading, Analyst Ratings, and Option Sentiment.
-    *   **Filtering**: Filters for relevant/material activity (e.g., recent insider sales).
-
-*   **`settings.py`**:
-    *   **Configuration**: Manages environment variables (API Keys, Timeouts) via Pydantic Settings.
-
-## Utility Scripts (Root)
-
-*   **`inspect_*.py`**: Standalone scripts for debugging specific data feeds (analysts, news, yfinance).
-*   **`debug_context_run.py`**: Script to test the context fetching logic in isolation.
+## Directory Map
+*   `app/`: Primary source code.
+    *   `research/`: Deep research agent logic.
+*   `docs/`: Comprehensive system documentation.
+*   `tests/`: Suite of 20+ tests for API, Logic, and Invariants.
+*   `logs/`: Forensic pipeline logs for audit trails.

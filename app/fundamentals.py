@@ -56,25 +56,28 @@ def get_advanced_fundamentals(ticker: str) -> AdvancedFundamentalAnalysis:
     data.trend_analysis = trend
     
     # 3. Institutional Valuation Engine (Hardened)
+    revenue_growth = data.revenue_growth if data.revenue_growth is not None else 0.1
+    shares = data.shares_outstanding if data.shares_outstanding and data.shares_outstanding > 0 else None
+    
     dcf = IntrinsicValuationEngine.calculate_dcf(
         fcf=data.free_cash_flow, 
-        revenue_growth=data.revenue_growth or 0.1, 
-        shares=data.shares_outstanding,
+        revenue_growth=revenue_growth, 
+        shares=shares,
         total_revenue=data.total_revenue,
         fcf_margin=data.free_cash_flow_margin,
         sector=data.sector or "Default"
     )
     
-    # Graham Number Calculation: Using direct Book Value if available, otherwise proxy
-    eps_proxy = data.net_income / data.shares_outstanding if data.shares_outstanding else 0
+    # Graham Number Calculation: Robust to None types
+    eps_proxy = 0.0
+    if data.net_income is not None and shares:
+        eps_proxy = data.net_income / shares
     
-    # Audit 7.3.0 Fix: Safer BVPS Proxy
     bvps_proxy = 0.0
-    if data.book_value:
+    if data.book_value is not None:
         bvps_proxy = data.book_value
-    elif data.market_cap and data.shares_outstanding and data.price_to_book and data.price_to_book > 0:
-        # BVPS = Price / (P/B)
-        price_proxy = data.market_cap / data.shares_outstanding
+    elif data.market_cap and shares and data.price_to_book and data.price_to_book > 0:
+        price_proxy = data.market_cap / shares
         bvps_proxy = price_proxy / data.price_to_book
         
     graham = IntrinsicValuationEngine.calculate_graham_number(eps_proxy, bvps_proxy)

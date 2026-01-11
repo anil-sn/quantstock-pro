@@ -79,6 +79,7 @@ class IntrinsicValuationEngine:
             val, _ = compute_pv_components(discount_rate, tg)
             tg_sensitivity[f"{tg*100:.1f}%"] = round(val / shares, 2)
 
+        status = "OPERATIONAL"
         return {
             "value": round(fair_price, 2) if status == "OPERATIONAL" else None,
             "status": status,

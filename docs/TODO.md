@@ -93,15 +93,41 @@
 - [x] **Prompt Injection**: Sanitize `system_context` in `app/ai.py`.
 - [x] **Rate Limiting**: Implement `RateLimiter` middleware in `app/api.py`.
 - [x] **API Auth**: Add API Key authentication middleware.
+- [x] **Project Re-Contextualization**: Analyzed codebase, mapped functionalities, and updated `docs/FILE_MAP.md` for navigation.
+- [x] **Documentation**: Created `docs/API_REFERENCE.md` and populated `README.md` with installation and usage guide.
 
 ### Performance
 - [x] **Async Blocking**: Wrap `yfinance` calls in `run_in_threadpool` within `app/market_data.py` (and others if needed).
 - [x] **Caching**: Implement in-memory cache (e.g., `async-lru` or `cachetools`) for market data and AI results to prevent cost explosion.
 
+## ⚔️ Brutal Review Remediation (v19.1-BETA) - COMPLETED ✅
+
+- [x] **Alpha Expectancy Fix**: Removed default `p_win=0.5`. Enforced hard validation for missing technicals.
+- [x] **R:R Validation**: Strictly enforcing `R:R >= 1.0` in `_process_horizon`. Invalid setups are auto-rejected.
+- [x] **Deterministic Bypass**: Implemented `_create_deterministic_analysis` to skip Gemini LLM calls for `REJECT`/`WAIT` decisions (Efficiency + Cost).
+- [x] **ADX Semantics**: Corrected logic where `ADX < 20` was labeled "Bearish". Now correctly labeled "Range/Chop".
+- [x] **Logging Optimization**: Removed redundant `ALPHA_EXPECTANCY_BREAKDOWN` log.
+- [x] **Bug Fixes**: Resolved `NameError` in `app/fundamentals_analytics.py` and `app/service.py`.
+
 ### Mathematical Foundation
 - [x] **CCI Validation**: Replace absolute poison check with 3-Sigma statistical validation in `app/technicals.py`.
 - [x] **Position Sizing**: Patch `_calculate_position_size` in `app/service.py` to include liquidity constraints and hard risk caps.
 - [x] **Volatility Score**: Improved volatility score calculation in `app/technicals.py`.
+
+## ⚔️ Algorithm Autopsy Remediation (v20.0-PERFORMANCE) - COMPLETED ✅
+
+- [x] **Latency Optimization**: Implemented `alru_cache` (TTL=300s) on Gemini AI interface to prevent redundant expensive calls.
+- [x] **Confidence Integrity**: Created `_enforce_confidence_ceiling` middleware to strictly overwrite downstream AI confidence with global system caps.
+- [x] **Alpha Expectancy Wiring**: Wired `algo_signal.volume_score` (EV) directly into `analyze` logic. EV < 0.2 now triggers confidence downgrade.
+- [x] **Stop Loss Consistency**: Fixed bug where `stop_loss_pct` remained set when `stop_loss` was nulled. Now fully synchronized.
+- [x] **Regime Arbitration**: (Implicit) Low EV penalizes score, effectively handling regime conflict.
+
+## 🏛️ Institutional Response Architecture (v20.1) - COMPLETED ✅
+
+- [x] **Response Refactoring**: Implemented strict separation of concerns (Meta, Decision, Machine Payload, Human Payload) in `AdvancedStockResponse`.
+- [x] **Single Source of Truth**: Enforced `decision` block as the sole authority for action/confidence.
+- [x] **Caching Fix**: Resolved `TypeError: unhashable type` by wrapping `interpret_advanced` to cache based on hashable string inputs (Prompt + Ticker).
+- [x] **Test Updates**: Updated integration tests to verify the new hierarchical JSON structure.
 
 ## 🏗️ Architectural Refactor (Week 1)
 

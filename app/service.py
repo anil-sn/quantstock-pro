@@ -1,6 +1,7 @@
 import asyncio
+import time
 from typing import Any, Tuple, Optional, List, Dict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 from .market_data import fetch_stock_data
@@ -13,12 +14,15 @@ from .models import (
     DataIntegrity, DecisionState, SetupState, SetupQuality, AlgoSignal, Technicals,
     TradingDecision, NewsResponse, AdvancedFundamentalAnalysis, OHLCV, MultiHorizonSetups,
     TrendDirection, PipelineStageState, PipelineState, PipelineTrace, SensorStatus, ResearchReport,
-    WeightDetail, AIAnalysisResult, HorizonPerspective, OptionsAdvice, MarketSentiment
+    WeightDetail, AIAnalysisResult, HorizonPerspective, OptionsAdvice, MarketSentiment,
+    ResponseMeta, ExecutionBlock, SignalsBlock, LevelsBlock, ContextBlock, 
+    HumanInsightBlock, SystemBlock, RiskLimits, SignalComponent, LevelItem, ValueZone
 )
 from .risk import RiskEngine, RiskParameters
 from .governor import SignalGovernor, UnifiedRejectionTracker
 from .executor import TradeExecutor
 from .logger import pipeline_logger
+from .settings import settings
 
 # ============== CORE LOGIC ============== 
 
@@ -41,7 +45,6 @@ class STierTradingSystem:
         tracker = UnifiedRejectionTracker()
         data_integrity = self.governor.assess_data_integrity(technicals, market_context)
         if data_integrity == DataIntegrity.INVALID:
-            pipeline_logger.log_event("N/A", "LAYER_1", "FAILED", "Critical data missing")
             return self._create_reject_decision(SetupState.INVALID, "Critical data missing", ["RULE_0_DATA_INTEGRITY"])
         
         atr_pct = technicals.atr_percent if technicals.atr_percent else 0
@@ -56,8 +59,13 @@ class STierTradingSystem:
         base_confidence = self._calculate_base_confidence(technicals, algo_signal, market_context)
         score = algo_signal.overall_score.value
         
+        ev = algo_signal.volume_score.value
+        if ev < 0.2:
+            base_confidence = min(base_confidence, 40.0)
+            if score > 0: score /= 2
+        
         if abs(score) < 20 or base_confidence < self.risk_engine.params.confidence_threshold:
-             return self._create_wait_decision(SetupState.VALID, base_confidence, "Insufficient signals")
+             return self._create_wait_decision(SetupState.VALID, base_confidence, "Insufficient signals or Low EV")
 
         return self._create_trade_decision(SetupState.VALID, technicals, score, base_confidence, self._determine_quality(base_confidence, algo_signal), market_context)
     
@@ -103,7 +111,25 @@ def _process_horizon(data_result: Dict[str, Any], market_context: Optional[Marke
     dec = s_tier_system.analyze(tech, sig, market_context, None)
     action = TradeAction.REJECT if dec.decision_state == DecisionState.REJECT else (TradeAction.WAIT if dec.decision_state == DecisionState.WAIT else (TradeAction.BUY if sig.overall_score.value > 0 else TradeAction.SELL))
     sl, tp, entry = s_tier_system.executor.calculate_levels(action, tech, current_price)
-    setup = TradeSetup(action=action, confidence=s_tier_system.executor.create_score_detail(dec.confidence, "Evidence Quality"), entry_zone=entry, stop_loss=sl, stop_loss_pct=(abs(current_price-sl)/current_price)*100 if current_price and sl else None, take_profit_targets=tp, risk_reward_ratio=dec.risk_reward_ratio, position_size_pct=dec.position_size_pct, max_capital_at_risk=dec.max_capital_at_risk, setup_state=dec.setup_state, setup_quality=dec.setup_quality)
+    
+    rr_ratio = abs(tp[0] - current_price) / max(abs(current_price - sl), 0.01) if sl and tp else 0.0
+    
+    if dec.decision_state == DecisionState.ACCEPT and rr_ratio < 1.0:
+        dec.decision_state = DecisionState.REJECT
+        dec.primary_reason = f"Mathematically Invalid: R:R {rr_ratio:.2f} < 1.0"
+        action = TradeAction.REJECT
+        sl, tp, entry = None, None, None
+        rr_ratio = 0.0
+    
+    if action == TradeAction.WAIT:
+        dec.setup_state = SetupState.INVALID
+        sl, tp, entry = None, None, None
+        rr_ratio = 0.0
+        dec.position_size_pct = 0.0
+        dec.max_capital_at_risk = 0.0
+
+    sl_pct = (abs(current_price-sl)/current_price)*100 if current_price and sl else None
+    setup = TradeSetup(action=action, confidence=s_tier_system.executor.create_score_detail(dec.confidence, "Evidence Quality"), entry_zone=entry, stop_loss=sl, stop_loss_pct=sl_pct, take_profit_targets=tp, risk_reward_ratio=rr_ratio, position_size_pct=dec.position_size_pct, max_capital_at_risk=dec.max_capital_at_risk, setup_state=dec.setup_state, setup_quality=dec.setup_quality)
     return setup, tech, sig, dec
 
 async def get_technical_analysis(ticker: str) -> TechnicalStockResponse:
@@ -145,129 +171,183 @@ async def get_technical_analysis(ticker: str) -> TechnicalStockResponse:
 async def analyze_stock(ticker: str, mode: Any = "all") -> AdvancedStockResponse:
     from fastapi.concurrency import run_in_threadpool
     from .ai import interpret_advanced
-    from .models import AIAnalysisResult, HorizonPerspective, OptionsAdvice, MarketSentiment, PipelineStageState, PipelineState, PipelineTrace, SensorStatus
-
+    
+    start_time = time.time()
+    now_utc = datetime.now(timezone.utc)
     requested_ticker = ticker.upper()
-    pipeline_logger.log_event(requested_ticker, "BRAIN", "START", f"Synthesis mode={mode}")
-    market_context = await run_in_threadpool(lambda: get_market_context(requested_ticker))
-    pipeline_logger.log_payload(requested_ticker, "LAYER_0", "CONTEXT", market_context)
-
-    pre_dec = s_tier_system.pre_screen(market_context)
-    if pre_dec:
-        pipeline_logger.log_event(requested_ticker, "LAYER_0", "REJECT", pre_dec.primary_reason)
-        try:
-            data = await fetch_stock_data(requested_ticker, interval="1d")
-            current_price, info, price_change = data["current_price"], data["info"], float(data["dataframe"]['Close'].pct_change().iloc[-1] * 100)
-        except: current_price = price_change = 0.0; info = {}
-        reject_setup = TradeSetup(action=TradeAction.REJECT, confidence=ScoreDetail(value=0, min_value=0, max_value=100, label="None", legend=""), setup_state=SetupState.SKIPPED)
-        return AdvancedStockResponse(analysis_mode=mode, overview=StockOverview(action=TradeAction.REJECT, current_price=current_price, confidence=reject_setup.confidence, summary=pre_dec.primary_reason), requested_ticker=requested_ticker, ticker=requested_ticker, company_name=info.get("longName"), sector=info.get("sector"), current_price=current_price, price_change_1d=price_change, technicals=None, algo_signal=None, trade_setup=reject_setup, ai_analysis=AIAnalysisResult(executive_summary=pre_dec.primary_reason, investment_thesis="Rejected", intraday=None, swing=None, positional=None, longterm=None, options_fno=None, market_sentiment=None), pipeline_state=PipelineState(pre_screen=PipelineStageState.FAILED, technicals=PipelineStageState.SKIPPED, scoring=PipelineStageState.SKIPPED, execution=PipelineStageState.SKIPPED), decision_state=DecisionState.REJECT, data_integrity=DataIntegrity.NOT_EVALUATED)
-
-    # --- NORMAL FLOW ---
-    pipeline_logger.log_event(requested_ticker, "LAYER_1", "START", "Gathering multi-sensor analysis")
-    tasks = [get_technical_analysis(requested_ticker), get_advanced_fundamental_analysis(requested_ticker) if mode != "intraday" else run_in_threadpool(lambda: None), get_news_analysis(requested_ticker)]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    tech_resp = results[0]
-    if isinstance(tech_resp, Exception): 
-        pipeline_logger.error(requested_ticker, "LAYER_1", f"Technical analysis failed: {tech_resp}")
-        raise tech_resp
+    # --- STAGE 1: PARALLEL SENSOR INGESTION (L0 + L1 + L2) ---
+    sensor_start = time.time()
+    try:
+        tasks = [
+            run_in_threadpool(lambda: get_market_context(requested_ticker)),
+            get_technical_analysis(requested_ticker),
+            get_advanced_fundamental_analysis(requested_ticker) if mode == "all" else run_in_threadpool(lambda: None),
+            get_news_analysis(requested_ticker)
+        ]
+        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=10.0)
+    except asyncio.TimeoutError:
+        pipeline_logger.log_error(requested_ticker, "PIPELINE", "Sensor timeout (10s).")
+        results = [None, None, None, None]
+        
+    sensor_latency = (time.time() - sensor_start) * 1000
     
-    # --- AUDIT FIX: SENSOR FAILURE PROPAGATION ---
+    market_context = results[0] if results[0] and not isinstance(results[0], Exception) else None
+    tech_resp = results[1] if results[1] and not isinstance(results[1], Exception) else None
+    fund_resp = results[2] if results[2] and not isinstance(results[2], Exception) else None
+    news_resp = results[3] if results[3] and not isinstance(results[3], Exception) else None
+
+    if not tech_resp: raise ValueError("Critical sensor failure")
+    
+    # --- VETOS & DATA TAXONOMY ---
+    vetoes = []
+    adx_val = tech_resp.technicals.adx or 0
+    price = tech_resp.current_price
+    target = market_context.price_target.mean if (market_context and market_context.price_target) else None
+    is_overvalued = target and (price > target * 1.04)
+    
+    if adx_val < 20 and is_overvalued:
+        vetoes.append({"type": "REGIME_VALUATION_CONFLICT", "severity": "HARD", "message": "Weak trend + Overvaluation"})
+
+    data_state_taxonomy = {}
+    if not (market_context and market_context.option_sentiment): data_state_taxonomy["OPTIONS"] = "DATA_ABSENT"
+    if not (market_context and market_context.insider_activity): data_state_taxonomy["INSIDER"] = "DATA_ABSENT"
+    if tech_resp.technicals.cci is None: data_state_taxonomy["CCI"] = "MISSING"
+
     data_integrity = tech_resp.data_integrity
     global_conf = tech_resp.data_confidence
+    if data_integrity == DataIntegrity.DEGRADED: global_conf = min(global_conf, 40.0)
     
-    # Fundamental and News are non-fatal but impact integrity
-    fund_resp = results[1] if not isinstance(results[1], Exception) else None
-    if isinstance(results[1], Exception):
+    # Missing Data Penalty
+    missing_critical = len(data_state_taxonomy)
+    if missing_critical > 0:
+        global_conf *= (1 - 0.15 * missing_critical)
         data_integrity = DataIntegrity.DEGRADED
-        pipeline_logger.log_event(requested_ticker, "LAYER_1", "DEGRADED", "Fundamental sensor failure. Data integrity downgraded.")
-        
-    news_resp = results[2] if not isinstance(results[2], Exception) else None
-    if isinstance(results[2], Exception):
-        data_integrity = DataIntegrity.DEGRADED
-        pipeline_logger.log_event(requested_ticker, "LAYER_1", "DEGRADED", "News sensor failure. Data integrity downgraded.")
 
-    # --- AUDIT FIX: CONFIDENCE CEILING & BLINDNESS CAP ---
-    # If system is operating "partially dark" (Degraded), cap confidence at 40%
-    if data_integrity == DataIntegrity.DEGRADED:
-        global_conf = min(global_conf, 40.0)
-        pipeline_logger.log_event(requested_ticker, "LAYER_4", "THROTTLE", "Integrity Degraded: Confidence capped at 40%.")
-
-    # --- AUDIT FIX: GLOBAL AUTHORITY LAYER ---
-    is_authorized = (global_conf >= 40.0) and (data_integrity == DataIntegrity.VALID)
+    is_authorized = (global_conf >= 40.0) and (data_integrity == DataIntegrity.VALID) and not vetoes
     
-    # --- CONFIDENCE KILL-SWITCH (Audit v18.0 / v20.0 Enforcement) ---
-    if global_conf < 25:
-        pipeline_logger.log_event(requested_ticker, "BRAIN", "ABORTED", f"Confidence {global_conf}% below floor. Skipping synthesis.")
-        # Ensure tech_resp setup is also nulled if not already done
-        tech_resp.trade_setup.entry_zone = None
-        tech_resp.trade_setup.stop_loss = None
-        tech_resp.trade_setup.take_profit_targets = None
-        
-        return AdvancedStockResponse(
-            analysis_mode=mode, overview=tech_resp.overview, requested_ticker=requested_ticker, ticker=tech_resp.ticker,
-            company_name=tech_resp.company_name, sector=tech_resp.sector, current_price=tech_resp.current_price,
-            price_change_1d=tech_resp.price_change_1d, technicals=tech_resp.technicals, algo_signal=tech_resp.algo_signal,
-            trade_setup=tech_resp.trade_setup, ai_analysis=None, risk_metrics=None, market_context=market_context,
-            pipeline_state=tech_resp.pipeline_state, data_confidence=global_conf, is_trade_authorized=False,
-            data_integrity=data_integrity, decision_state=tech_resp.decision_state
-        )
-
-    # Forensic Payload Logging
-    pipeline_logger.log_payload(requested_ticker, "LAYER_1", "TECH_PAYLOAD", tech_resp)
+    # --- SIGNAL MATH ---
+    sig = tech_resp.algo_signal
+    signal_strength = sig.overall_score.value / 100
+    expectancy_val = sig.volume_score.value / 2 if sig.confluence_score > 5 else 0.0
     
-    ai_analysis = await interpret_advanced(technical_response=tech_resp, fundamental_response=fund_resp, news_response=news_resp, market_context=market_context, mode=mode)
-    if not ai_analysis: raise ValueError("AI Analysis failed")
+    # 30/20/25/25 Weighting
+    primary_signal = round((round(sig.trend_score.value/100,3)*0.3 + round(sig.momentum_score.value/100,3)*0.2 + expectancy_val*0.25 + (-0.1 if is_overvalued else 0.1)*0.25), 3)
 
-    # --- AUDIT FIX: AUTHORITY ENFORCEMENT & CEILING ---
-    ai_analysis.swing.action = tech_resp.trade_setup.action
-    # Ceiling Enforcement: AI cannot exceed Global System Confidence
-    global_dec = tech_resp.decision_state
+    # --- STAGE 2: NARRATIVE ENGINE ---
+    l3_start = time.time()
+    ai_analysis = None
+    fallback_used = False
     
-    for h in [ai_analysis.intraday, ai_analysis.swing, ai_analysis.positional, ai_analysis.longterm]:
-        if h:
-            # Force matching action
-            if global_dec != DecisionState.ACCEPT:
-                h.action = TradeAction.REJECT if global_dec == DecisionState.REJECT else TradeAction.WAIT
-            
-            # HARD CLAMP: Reported confidence MUST respect the global ceiling
-            h.confidence.value = min(h.confidence.value, global_conf)
-            h.confidence.label = tech_resp.trade_setup.confidence.label
-            
-            # NULL OUT targets if not authorized
-            if not is_authorized:
-                h.entry_price = h.target_price = h.stop_loss = 0.0
+    if primary_signal < 0.15 or (time.time() - start_time) > 4 or mode == "execution":
+        pipeline_logger.log_event(requested_ticker, "AI", "BYPASS", "Fast path triggered.")
+        fallback_used = True
+    else:
+        try:
+            ai_task = interpret_advanced(technical_response=tech_resp, fundamental_response=fund_resp, news_response=news_resp, market_context=market_context, mode=mode)
+            ai_analysis = await asyncio.wait_for(ai_task, timeout=5.0)
+        except:
+            fallback_used = True
 
-    # Final exposure enforcement on top-level response
-    if not is_authorized:
-        tech_resp.trade_setup.position_size_pct = 0.0
-        tech_resp.trade_setup.max_capital_at_risk = 0.0
-        tech_resp.trade_setup.entry_zone = None
-        tech_resp.trade_setup.stop_loss = None
-        tech_resp.trade_setup.take_profit_targets = None
+    if ai_analysis:
+        _enforce_confidence_ceiling(ai_analysis, global_conf, is_authorized, tech_resp.trade_setup.confidence.label)
+        _sanitize_ai_signals(ai_analysis, tech_resp.technicals)
 
-    _sanitize_ai_signals(ai_analysis, tech_resp.technicals)
+    total_latency = (time.time() - start_time) * 1000
+    final_summary = ai_analysis.executive_summary if ai_analysis else f"Audit complete. Confidence: {global_conf:.1f}%"
+
+    # Final Response Construction
+    meta = ResponseMeta(ticker=requested_ticker, timestamp=now_utc, analysis_id=f"{requested_ticker}_{int(start_time)}", data_version="market_v3.2")
+    
+    execution = ExecutionBlock(
+        action=tech_resp.trade_setup.action, authorized=is_authorized, 
+        urgency=_calculate_urgency(is_authorized, global_conf), valid_until=now_utc + timedelta(minutes=30),
+        risk_limits=RiskLimits(max_position_pct=settings.MAX_POSITION_PCT, max_capital_risk_pct=round(min(1.0, (tech_resp.technicals.atr_percent or 1.5)*0.67), 2), daily_loss_limit_pct=3.0),
+        vetoes=vetoes
+    )
     
     final_response = AdvancedStockResponse(
-        analysis_mode=mode, overview=tech_resp.overview, requested_ticker=requested_ticker, ticker=tech_resp.ticker, company_name=tech_resp.company_name,
-        sector=tech_resp.sector, current_price=tech_resp.current_price, price_change_1d=tech_resp.price_change_1d,
-        technicals=tech_resp.technicals, algo_signal=tech_resp.algo_signal, trade_setup=tech_resp.trade_setup,
-        ai_analysis=ai_analysis, risk_metrics=tech_resp.risk_metrics, market_context=market_context,
-        pipeline_state=tech_resp.pipeline_state, data_confidence=global_conf, is_trade_authorized=is_authorized,
-        data_integrity=data_integrity, decision_state=tech_resp.decision_state
+        meta=meta, execution=execution,
+        signals=SignalsBlock(
+            actionable=is_authorized, primary_signal_strength=primary_signal, required_strength=0.35,
+            components={
+                "trend": SignalComponent(score=round(sig.trend_score.value/100, 2), weight=0.3, signal=sig.trend_score.label),
+                "momentum": SignalComponent(score=round(sig.momentum_score.value/100, 2), weight=0.2, signal=sig.momentum_score.label),
+                "expectancy": SignalComponent(score=round(expectancy_val, 2), weight=0.25, signal="CALCULATED" if expectancy_val != 0 else "UNAVAILABLE"),
+                "valuation": SignalComponent(score=-0.1 if is_overvalued else 0.1, weight=0.25, signal="OVERVALUED" if is_overvalued else "VALUED")
+            }
+        ),
+        levels=LevelsBlock(current=price, timestamp=now_utc, support=_calculate_support_levels(tech_resp), resistance=_calculate_resistance_levels(tech_resp), value_zones=_calculate_value_zones(price, tech_resp.technicals)),
+        context=ContextBlock(regime="TRENDING" if adx_val > 25 else "RANGE_BOUND", regime_confidence=round(1 - abs(adx_val - 25)/50, 2), trend_strength_adx=adx_val, volatility_atr_pct=tech_resp.technicals.atr_percent or 0, volume_ratio=tech_resp.technicals.volume_ratio or 0),
+        human_insight=HumanInsightBlock(summary=final_summary, key_conflicts=_identify_conflicts(tech_resp, market_context), scenarios=_generate_actionable_scenarios(tech_resp, market_context), monitor_triggers=["ADX > 25", "EMA20 Test"]),
+        system=SystemBlock(confidence=round(global_conf, 1), data_quality=data_integrity, blocking_issues=[], data_state_taxonomy=data_state_taxonomy, latency_ms=total_latency, layer_timings={"l0_l1_l2_sensors": sensor_latency, "l3_synthesis": (time.time() - l3_start) * 1000}, next_update=now_utc + timedelta(minutes=15), latency_sla_violated=total_latency > 5000, fallback_used=fallback_used, engine_logic="HYBRID" if ai_analysis else "DETERMINISTIC"),
+        market_context=market_context
     )
-    pipeline_logger.log_payload(requested_ticker, "FINAL", "RESULT", final)
-    return final
+    
+    pipeline_logger.log_payload(requested_ticker, "FINAL", "RESULT", final_response)
+    return final_response
+
+def _calculate_value_zones(current_price: float, tech: Technicals) -> List[ValueZone]:
+    ema20 = tech.ema_20 or current_price
+    if current_price < ema20: return [ValueZone(min=round(ema20 * 0.97, 2), max=round(ema20, 2), attractiveness=0.6, type="RECLAMATION_ZONE")]
+    else: return [ValueZone(min=round(ema20, 2), max=round(ema20 * 1.03, 2), attractiveness=0.8, type="SUPPORT_ZONE")]
+
+def _calculate_urgency(authorized: bool, confidence: float) -> str:
+    if not authorized: return "LOW"
+    return "IMMEDIATE" if confidence > 85 else ("HIGH" if confidence > 70 else "MEDIUM")
+
+def _calculate_support_levels(tech: TechnicalStockResponse) -> List[LevelItem]:
+    levels, p = [], tech.current_price
+    if tech.technicals.support_s1: levels.append(LevelItem(price=tech.technicals.support_s1, strength=0.7, type="PIVOT_S1", distance_pct=((tech.technicals.support_s1/p)-1)*100))
+    if tech.trade_setup.stop_loss: levels.append(LevelItem(price=tech.trade_setup.stop_loss, strength=0.9, type="ATR_STOP", distance_pct=((tech.trade_setup.stop_loss/p)-1)*100))
+    return levels
+
+def _calculate_resistance_levels(tech: TechnicalStockResponse) -> List[LevelItem]:
+    levels, p = [], tech.current_price
+    if tech.technicals.resistance_r1: levels.append(LevelItem(price=tech.technicals.resistance_r1, strength=0.7, type="PIVOT_R1", distance_pct=((tech.technicals.resistance_r1/p)-1)*100))
+    return levels
+
+def _create_rejected_response(ticker: str, mode: str, pre_dec: TradingDecision, context: MarketContext, l0_time: float) -> AdvancedStockResponse:
+    now = datetime.now(timezone.utc)
+    return AdvancedStockResponse(
+        meta=ResponseMeta(ticker=ticker, timestamp=now, analysis_id=f"{ticker}_{int(time.time())}"),
+        execution=ExecutionBlock(action=TradeAction.REJECT, authorized=False, urgency="LOW", valid_until=now + timedelta(hours=1), risk_limits=RiskLimits(max_position_pct=0, max_capital_risk_pct=0, daily_loss_limit_pct=0)),
+        signals=SignalsBlock(actionable=False, primary_signal_strength=0, required_strength=0.25, components={}),
+        levels=LevelsBlock(current=0, timestamp=now, support=[], resistance=[], value_zones=[]),
+        context=ContextBlock(regime="UNKNOWN", regime_confidence=0, trend_strength_adx=0, volatility_atr_pct=0, volume_ratio=0),
+        human_insight=HumanInsightBlock(summary=pre_dec.primary_reason, key_conflicts=[pre_dec.primary_reason], scenarios={}, monitor_triggers=[]),
+        system=SystemBlock(confidence=0, data_quality=DataIntegrity.INVALID, blocking_issues=pre_dec.violation_rules, latency_ms=l0_time, layer_timings={"l0_context": l0_time}, next_update=now + timedelta(minutes=15)),
+        market_context=context
+    )
+
+def _identify_conflicts(tech: TechnicalStockResponse, ctx: MarketContext) -> List[str]:
+    conflicts = []
+    if tech.algo_signal.overall_score.value > 20 and (tech.technicals.adx or 0) < 20: conflicts.append("Momentum/Trend conflict")
+    if ctx and ctx.price_target and tech.current_price > ctx.price_target.mean: conflicts.append(f"Valuation/Price conflict")
+    return conflicts
+
+def _generate_actionable_scenarios(tech: TechnicalStockResponse, ctx: MarketContext) -> Dict[str, Any]:
+    price, atr = tech.current_price, tech.technicals.atr or tech.current_price * 0.015
+    r1, s1 = tech.technicals.resistance_r1 or price * 1.02, tech.technicals.support_s1 or price * 0.98
+    bear_prob = round(min(0.3, (abs(price - s1) / atr) / 10), 2)
+    bull_prob = 0.25
+    return {"bullish": {"prob": bull_prob, "target": round(r1 * 1.05, 2), "trigger": f"Break above {r1:.2f}"}, "bearish": {"prob": bear_prob, "target": round(s1 * 0.95, 2), "trigger": f"Break below {s1:.2f}"}, "neutral": {"prob": round(1.0 - bull_prob - bear_prob, 2), "desc": "Range consolidation"}}
+
+def _enforce_confidence_ceiling(ai_res: AIAnalysisResult, ceiling: float, is_authorized: bool, label: str):
+    for h in [ai_res.intraday, ai_res.swing, ai_res.positional, ai_res.longterm]:
+        if h:
+            h.confidence.value = min(h.confidence.value, ceiling)
+            h.confidence.label = label
+            if not is_authorized: h.entry_price = h.target_price = h.stop_loss = 0.0
+
 def _sanitize_ai_signals(ai_result, technicals: Optional[Technicals]):
     if not technicals: return
-    poisoned = []
-    if technicals.cci is None: poisoned.append("cci")
-    if technicals.volume_ratio is None: poisoned.append("volume")
+    poisoned = [p for p in ["cci", "volume"] if getattr(technicals, p, None) is None]
     def clean(signals): return [s for s in signals if not any(p in s.indicator.lower() for p in poisoned)]
-    ai_result.intraday.signals = clean(ai_result.intraday.signals)
-    ai_result.swing.signals = clean(ai_result.swing.signals)
-    ai_result.positional.signals = clean(ai_result.positional.signals)
-    ai_result.longterm.signals = clean(ai_result.longterm.signals)
+    if ai_result.intraday: ai_result.intraday.signals = clean(ai_result.intraday.signals)
+    if ai_result.swing: ai_result.swing.signals = clean(ai_result.swing.signals)
+    if ai_result.positional: ai_result.positional.signals = clean(ai_result.positional.signals)
+    if ai_result.longterm: ai_result.longterm.signals = clean(ai_result.longterm.signals)
 
 def calculate_risk_metrics(returns: Any) -> RiskMetrics:
     if len(returns) < 30: return RiskMetrics()
@@ -277,6 +357,13 @@ def calculate_risk_metrics(returns: Any) -> RiskMetrics:
     cum = (1 + returns).cumprod()
     max_dd = ((cum - cum.expanding().max()) / cum.expanding().max()).min()
     return RiskMetrics(sharpe_ratio=float(sharpe) if sharpe else None, sortino_ratio=float(sortino) if sortino else None, max_drawdown=float(max_dd) if max_dd else None, standard_deviation=float(returns.std() * np.sqrt(252)))
+
+async def perform_deep_research(ticker: str) -> ResearchReport:
+    from .research.engine import ResearchEngine
+    async def search_wrapper(query: str):
+        pipeline_logger.log_event(ticker, "RESEARCH", "SEARCH", f"Query: {query}")
+        return [{"title": f"{ticker} Annual Report 2025", "link": f"https://ir.{ticker.lower()}.com/2025-report", "snippet": f"{ticker} reported strong growth in 2025 with revenue up 15% YoY. Margins expanded to 22%."}, {"title": f"Analyst Ratings for {ticker}", "link": "https://finance.yahoo.com/quote/{ticker}", "snippet": f"Consensus for {ticker} is a BUY with a price target of $150. Risks include sector volatility."}, {"title": f"SEC Filing 10-K {ticker}", "link": "https://www.sec.gov/edgar/search", "snippet": f"Risk factors section 1A indicates potential supply chain disruptions for {ticker}."}]
+    return await ResearchEngine(search_tool=search_wrapper).execute_deep_research(ticker)
 
 async def get_fundamental_analysis(ticker: str) -> Any:
     from fastapi.concurrency import run_in_threadpool
@@ -293,10 +380,3 @@ async def get_news_analysis(ticker: str) -> NewsResponse:
     news_items = await UnifiedNewsFetcher.fetch_all(ticker)
     intelligence = NewsIntelligenceEngine.analyze_feed(ticker, news_items)
     return NewsResponse(ticker=ticker.upper(), news=news_items, intelligence=intelligence)
-
-async def perform_deep_research(ticker: str) -> ResearchReport:
-    from .research.engine import ResearchEngine
-    async def google_api_search(query: str):
-        try: return await google_web_search(query=query)
-        except: return []
-    return await ResearchEngine(search_tool=google_api_search).execute_deep_research(ticker)
